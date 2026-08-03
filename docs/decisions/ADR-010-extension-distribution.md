@@ -37,8 +37,14 @@ private — the URL is guessable in principle and shareable in practice.
 
 | Channel | Audience | Configuration |
 |---|---|---|
-| Enterprise policy force-install | Internal QA and engineering on managed browsers | Origin allow-list and ruleset **policy-pinned**, not user-editable |
-| Chrome Web Store, unlisted | Contractors, external QA, unmanaged machines | Same defaults, configured in-extension; allow-list still enforced, but from the bundled default rather than policy |
+| Enterprise policy force-install | Internal QA and engineering on managed browsers | Origin allow-list and ruleset **policy-pinned** — the org sets the value centrally and it is not exposed as a setting anywhere in the extension UI |
+| Chrome Web Store, unlisted | Contractors, external QA, unmanaged machines | No policy to pin from, so the extension ships an **immutable bundled default** and refreshes it at runtime over a signed channel (below) — same as the policy channel, neither surface lets the person using the browser edit it |
+
+**In neither channel can the person using the browser edit the allow-list or
+ruleset.** The only difference is who controls the value that ships: an org
+administrator via policy, or the extension's own signed default-and-refresh
+mechanism when no policy exists to pin it. There is no third, user-facing path —
+if there were, it would defeat the point of pinning it at all.
 
 External clinic customers are explicitly **not** a target for either channel. They
 use Recording Links.
@@ -63,12 +69,15 @@ be the weaker configuration.
 
 - Pros: One channel covering everyone. Standard update mechanism. No policy
   infrastructure needed.
-- Cons: Cannot pin the origin allow-list, so the security model's central control
-  becomes user-editable. Every release — including a redaction ruleset fix, which is
-  a compliance fix — waits on Google review. `debugger` permission invites repeated
-  review friction.
-- Rejected: Making the allow-list user-editable is not acceptable, and putting
-  compliance fixes behind third-party review latency is worse.
+- Cons: Cannot pin the origin allow-list via org policy — there is no administrator
+  channel setting it centrally, only the extension's own bundled default. Every
+  *store release* — including a redaction ruleset fix, which is a compliance fix —
+  would wait on Google review if the ruleset shipped only via extension update.
+  `debugger` permission invites repeated review friction.
+- Rejected: Losing the policy-pinning coverage entirely is not acceptable for the
+  primary internal audience, and putting compliance fixes behind third-party
+  review latency — rather than the runtime-fetch mechanism this ADR adopts below —
+  is worse.
 
 ### Self-hosted `.crx` with an update URL
 
@@ -107,6 +116,18 @@ be the weaker configuration.
   fix reaches contractors after Google review. Mitigated by fetching ruleset bundles
   at runtime rather than embedding them — which makes ruleset fixes independent of
   extension releases on both channels, and is the more important structural point.
+- **Runtime ruleset fetching must not become the weaker path.** Faster delivery
+  is only safe if the fetched bundle is as trustworthy as a policy-pinned one, so
+  the runtime channel is signed and versioned: each bundle carries a monotonic
+  version and a signature checked against a trust root pinned in the extension
+  binary itself (not fetched, so it can't be substituted alongside a forged
+  bundle). Activation is atomic — a bundle is either fully adopted or not adopted
+  at all, never partially applied. If a fetch fails, is unreachable, or fails
+  signature verification, the extension keeps the last-known-good bundle already
+  active; if there is no last-known-good bundle yet (first run with no policy and
+  no successful fetch), it **blocks capture** rather than falling back to no
+  ruleset at all. Policy-pinned rules, where present, remain authoritative over
+  anything the runtime channel could ever deliver.
 - **Contractors get the weaker configuration.** Documented, and a reason to prefer
   onboarding contractors onto managed browsers where practical.
 - Dropping the Web Store channel later is trivial. Adding it later would not have been

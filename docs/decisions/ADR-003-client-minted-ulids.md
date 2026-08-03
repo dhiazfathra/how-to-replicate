@@ -22,6 +22,17 @@ burst load, and clocks can jump backwards during NTP correction or DST transitio
 An identifier that sorts correctly on its own removes an entire class of ordering
 bug.
 
+That order is **capture order, not causal order**: the sequencer assigns a ULID at
+the moment its own callback observes the event — CDP delivery, console hook, DOM
+listener — not at whatever instant the underlying browser event actually occurred.
+For a single source that distinction is invisible. Across three independent
+callback queues it is not: a network response and a click that happen in the same
+millisecond are ordered by whichever callback the JS event loop runs first, which
+can vary run to run. This is the order every consumer (playback, step generation,
+ADR-004's timeline) is built to rely on, and it is what "canonical order" means
+throughout this design — not a guarantee that causally-earlier events always sort
+first.
+
 ## Decision
 
 **All identifiers are ULIDs minted on the client.**

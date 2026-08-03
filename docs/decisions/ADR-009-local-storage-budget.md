@@ -44,11 +44,27 @@ durable second copy exists.**
   policy-overridable.
 - Video persists as **chunked blob records**, not one large value — bounded
   transaction size, and resumable upload once Phase 1 exists.
+- The preflight `estimate()` check is not a reservation — it is a check against
+  quota *as of that moment*. Quota can still be exhausted mid-capture, since
+  nothing reserves the space between the check and the last chunk write. If an
+  IndexedDB chunk write throws `QuotaExceededError` mid-capture: recording stops
+  immediately, whatever chunks and events already committed are retained (not
+  discarded) and the extension prompts to export or delete to free space, and the
+  capture is marked `state: 'failed'` with a distinct `reason: 'quota_exceeded'` —
+  it never reaches `ready`, per the fail-closed gate in ADR-005.
 
 ### Phase 1 and later
 
-LRU eviction over captures where `sync.lastPushedAt !== null`. Unsynced captures are
-never evicted, regardless of age or cap pressure.
+LRU eviction over captures where `sync.manifestComplete === true`. `lastPushedAt`
+alone is **not** the eviction signal — it flips on any metadata push, including
+one where the video is still uploading. `manifestComplete` is the field that flips
+only once the server has verified every asset's size and hash against the
+manifest, per ADR-012's rule that metadata-only sync does not count as synced. A
+capture whose video chunks are
+still uploading, or whose manifest write hasn't been acknowledged, must not be
+eligible — evicting it would delete the only copy of the video before the server
+copy exists. Unsynced (or partially-synced) captures are never evicted, regardless
+of age or cap pressure.
 
 ### Phase 0
 
@@ -121,5 +137,5 @@ attention, and able to act.
   pre-record `estimate()` check is what actually protects against this; the
   per-workspace cap is a fairness heuristic, not the real guard.
 - Moving to LRU-always later would be a small change — but only ever after sync
-  exists, and it should be gated on `lastPushedAt` regardless of phase, so the
-  condition is written once and holds forever.
+  exists, and it should be gated on `manifestComplete`, not `lastPushedAt`,
+  regardless of phase, so the condition is written once and holds forever.

@@ -43,6 +43,22 @@ only viable client-side path, and it is required anyway for pre-encode blur
 monkey-patching for console and bodies. The capture is stamped
 `fidelity: 'degraded'` and the viewer renders that badge prominently.**
 
+Two failure paths within the primary path itself, both following ADR-005's
+fail-closed rule rather than storing anything unverified:
+
+- **`Network.getResponseBody` can fail** for a given `requestId` — the resource was
+  never buffered (a download, a cleared response, a race against
+  `Network.loadingFinished`). When it fails, the network event is stored with no
+  body, `redaction.fidelity: 'dropped'`, and `withheldEventCount` increments. It is
+  never retried with an assumed-empty body substituted silently.
+- **The detach handoff has a blind window.** `chrome.debugger.onDetach` fires only
+  after Chrome has already ended the CDP session, so events in the gap between
+  detach and fallback activation are lost to both paths. The extension emits a
+  `lifecycle` event marking exactly where the handoff occurred and increments
+  `withheldEventCount` for the gap — it does not attempt to reconstruct or
+  interpolate what was missed. The viewer surfaces the gap on the timeline rather
+  than presenting a seamless join.
+
 Video: display stream drawn to `OffscreenCanvas`, blur composited, canvas stream fed
 to `MediaRecorder` in an offscreen document (MV3 service workers cannot hold media
 streams). Chunked timeslice output feeds the Instant Replay ring buffer.

@@ -14,7 +14,7 @@ Lifecycle: `Proposed → Accepted → (Superseded by ADR-NNN | Deprecated)`.
 | [001](ADR-001-local-first-architecture.md) | IndexedDB is the permanent source of truth; the server is a sync target | Accepted | all |
 | [002](ADR-002-client-only-phase-0.md) | Phase 0 ships zero new server-side code | Accepted | 0 |
 | [003](ADR-003-client-minted-ulids.md) | Client-minted ULIDs for capture and event identity | Accepted | all |
-| [004](ADR-004-append-only-event-timeline.md) | One append-only timeline for console, network, and interaction events | Accepted | all |
+| [004](ADR-004-append-only-event-timeline.md) | One append-only timeline for console, network, interaction, navigation, lifecycle, and annotation events | Accepted | all |
 | [005](ADR-005-fail-closed-redaction-gate.md) | Client-side redaction as primary control, behind a fail-closed gate | Accepted | all |
 | [006](ADR-006-client-side-capture-via-cdp.md) | Capture via CDP, with a fidelity-marked fallback | Accepted | all |
 | [007](ADR-007-pluggable-llm-providers.md) | Pluggable LLM providers over a mandatory deterministic floor | Accepted | 0+ |

@@ -35,9 +35,17 @@ audit logs.
 The secretless OAuth paths differ between the two providers, and this is a real
 constraint rather than a preference:
 
-- **GitLab** supports OAuth with PKCE for public clients.
-- **GitHub** does **not** support PKCE for OAuth Apps. Its supported secretless path
-  for a public client is the **device authorization flow**.
+- **GitLab** supports OAuth with PKCE for public clients — the `code_verifier`
+  fully replaces the client secret in the token exchange, so a public client needs
+  no secret at all.
+- **GitHub** OAuth Apps accept the PKCE parameters (`code_challenge`,
+  `code_challenge_method=S256`, `code_verifier`) since mid-2025, but GitHub still
+  does not distinguish public from confidential clients: exchanging the
+  authorization code for a token still requires `client_secret` regardless of
+  whether PKCE was used. PKCE hardens the GitHub flow against interception; it does
+  not remove the secret requirement the way it does for GitLab. So GitHub's actual
+  secretless path for a public client remains the **device authorization flow**,
+  which needs no client secret and no redirect URI at all.
 
 ## Decision
 
@@ -47,16 +55,26 @@ OAuth.**
 ```ts
 interface TrackerProvider {
   authorize(): Promise<Session>;
-  createIssue(doc: ReplicationDoc, assets: AssetRef[], target: ProjectTarget)
+  createIssue(idempotencyKey: string, doc: ReplicationDoc, target: ProjectTarget)
     : Promise<IssueRef>;
-  attachAssets(issue: IssueRef, assets: AssetRef[]): Promise<void>;
+  attachAssets(issue: IssueRef, assets: AssetRef[]): Promise<AttachResult[]>;
 }
 ```
 
+`createIssue` and `attachAssets` are separate remote writes and must be treated as
+such: `idempotencyKey` is the capture's ULID, and the returned `IssueRef` is
+persisted locally **immediately** on success, before `attachAssets` is ever called.
+An outbox retry after a partial failure re-reads that persisted `IssueRef` and
+retries only the attachment step — it never calls `createIssue` again for a
+capture that already has one. `attachAssets` returns a per-asset result so a
+single oversized attachment (over a provider's size limit) fails independently:
+the issue links back to the capture for that asset instead of blocking the
+others.
+
 | Provider | Priority | Flow | Why this flow |
 |---|---|---|---|
-| GitHub | first | OAuth **device flow** (`/login/device/code`) | GitHub does not support PKCE for public clients. Device flow needs no client secret and no redirect URI — the latter being awkward in an extension anyway. |
-| GitLab | second | OAuth **PKCE** | GitLab supports PKCE for public clients. |
+| GitHub | first | OAuth **device flow** (`/login/device/code`) | GitHub's code exchange requires `client_secret` even with PKCE present. Device flow needs no client secret and no redirect URI — the latter being awkward in an extension anyway. |
+| GitLab | second | OAuth **PKCE** | GitLab's PKCE `code_verifier` fully substitutes for a client secret for public clients. |
 | Slack | Phase 1 | OAuth PKCE via the Phase 1 server | Not a tracker; shares the outbox dispatch path. |
 
 Token handling:
@@ -64,6 +82,12 @@ Token handling:
 - Access tokens in `chrome.storage.session` — cleared on browser exit.
 - Refresh tokens encrypted at rest in `chrome.storage.local`.
 - No credential is ever typed by the user into the extension.
+- Both storage areas are reachable by content scripts by default. Neither token
+  needs to be, so the background service worker calls
+  `chrome.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' })` (and
+  the equivalent for `.local`) at startup, restricting both areas to the
+  extension's own pages and service worker. A compromised content script on a
+  captured page then cannot read either token.
 
 Routing payload: the replication document as issue body, video and screenshots as
 attachments, a deep link back to the capture, and structured labels derived from

@@ -43,11 +43,29 @@ CDN.**
 
 - All blob access goes through time-limited signed URLs; no public buckets, ever.
 - Server-side encryption at rest; TLS in transit.
-- Retention is enforced by a job that purges blobs and metadata **together** — an
-  orphaned blob outliving its metadata is a data-retention violation that no audit
-  would catch.
 - Services code against the **S3 API only**. No provider-specific extensions, so the
   endpoint stays a configuration value.
+
+Retention deletion cannot be a single atomic transaction — S3 and Postgres are two
+systems with no shared commit. So it is a **recoverable protocol with an explicit
+completion condition**, not a one-step "purge together":
+
+1. Mark the capture `deleting` in Postgres (a state, not a delete — the row still
+   exists so a crash mid-deletion is resumable, not silently lost).
+2. Delete every blob under the capture's key prefix from object storage. Object
+   keys are per-capture (ADR-003's ULID), so this is a scoped prefix delete, not a
+   scan.
+3. Only after step 2 confirms — a positive delete acknowledgment for every listed
+   object, not merely "the request didn't error" — delete the Postgres row.
+4. A reconciliation sweep runs on a schedule: any capture stuck in `deleting` past a
+   grace period retries from step 2 (idempotent — deleting an already-deleted key
+   is a no-op); any object-storage key with no matching Postgres row (from a crash
+   between steps 2 and 3, an interrupted delete, or a bug) is itself deleted and the
+   orphan is alerted, not silently cleaned up.
+
+**Retention is "complete" only when no row is in `deleting` past its grace period
+and the reconciliation sweep finds no orphaned keys.** That is the auditable
+condition — not "we ran the job."
 
 That last constraint is what keeps this decision cheap to revisit. The compliance
 argument is what makes self-hosting the default; coding to the S3 API is what means a
@@ -102,12 +120,21 @@ future move is a configuration change and a data migration rather than a rewrite
   be exercised, not assumed — an untested backup of the only copy of a capture is not
   a backup.
 - **Playback latency is worse for distant brand surfaces** than a CDN would give.
-  Mitigations available without reopening the decision: byte-range requests for
-  seeking, and a reverse-proxy cache inside the perimeter. Measure before optimising.
-- **Retention deletion must purge blob and metadata atomically-enough.** The pairing
-  is what makes retention provable during an audit. Design it as a two-phase job with
-  a reconciliation sweep for orphans, and alert on any orphan found — an orphan is a
-  compliance defect, not a housekeeping item.
+  Byte-range requests for seeking are a safe mitigation. **A reverse-proxy cache
+  inside the perimeter is not automatically safe** — it creates another copy of
+  PHI-adjacent video that the retention protocol above does not touch, since the
+  cache never sees the S3/Postgres delete. If a reverse-proxy cache is added, it
+  must carry its own bounded TTL short enough that a purged capture's cached bytes
+  expire on their own within the retention grace period, and cache eviction must be
+  explicitly triggered as a fourth step in the deletion protocol, not left to TTL
+  alone — an explicit invalidation call, logged in the same audit trail as the
+  blob and metadata deletes. Until that invalidation step exists, no reverse-proxy
+  caching of these blobs is permitted.
+- **Retention deletion is a recoverable protocol, not an atomic purge.** See
+  Decision above — a `deleting` state, ordered blob-then-metadata deletes, and a
+  reconciliation sweep are what make the guarantee provable rather than assumed.
+  An orphaned key found by the sweep is a compliance defect and gets alerted, not
+  silently cleaned up without record.
 - **Capacity planning is now a real activity.** A 40 MB average capture across 13+
   brand surfaces at meaningful adoption is terabytes per year. Retention windows are
   the primary lever, which makes the Phase 1 retention default (spec §22) a capacity

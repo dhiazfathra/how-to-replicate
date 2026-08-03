@@ -46,8 +46,19 @@ ruleset through `packages/capture-core`, generates a replication document, and
 produces a downloadable **`.htr` bundle** — video, timeline JSON, and rendered
 markdown — that the reporter attaches to an email or an existing support ticket.
 
-No server. Nothing transmitted to us. `TRD-SEC-003` does not gate it, because there is
-no customer PHI handling on our side to review.
+No server. **The page itself performs no network upload** — that narrower claim is
+what actually holds, not the broader one that no customer PHI handling occurs on
+our side at all. The `.htr` bundle is customer video and timeline data, and once
+the reporter attaches it to an email or an existing support ticket, it enters
+whatever channel receives that email or ticket — a system we do operate and do
+control, even though the Recording Link page didn't put it there directly. The
+approved intake channel is the existing support-ticket system (already covered by
+its own access, retention, and review posture as an email/ticketing system); this
+ADR does not carve out a new exemption for `.htr` attachments arriving through it.
+`TRD-SEC-003` gates the **network-facing** upload path specifically — Phase 2's
+`sync-gateway` endpoint receiving bytes directly from an anonymous browser — because
+that is the new capability this feature introduces, not the general fact that
+customer data can reach support systems through normal channels.
 
 ### Phase 2 — server-backed
 
@@ -55,6 +66,18 @@ The same page, upgraded: token-scoped anonymous upload directly into `sync-gatew
 no download step. Server-side `redaction-audit` runs before the capture becomes
 viewable — a stricter posture than for internal captures, because the reporter's
 machine is outside our control.
+
+Critically, redaction here must happen **before any durable write**, not merely
+before viewability. The naive reading — "audit runs before `ready`" — would still
+let raw uploaded bytes sit durably in `sync-gateway`'s ingest storage or the object
+store for however long the audit takes to run, which is exactly the "unredacted
+PHI at rest" outcome ADR-005 forbids. So the actual pipeline is: bytes land in a
+**non-durable inspection buffer** (in-memory or a short-TTL scratch area, not the
+retained object store), the ruleset applies there, and only a **redacted** result
+is ever written to durable storage. If inspection or redaction fails for any
+reason, the upload is rejected outright — there is no path where raw source bytes
+are retained "for later" redaction or re-processing; that would recreate the exact
+re-redaction problem ADR-004 already ruled out for the authenticated path.
 
 **`TRD-SEC-003` is a hard prerequisite** for this stage.
 

@@ -47,12 +47,16 @@ client may call APIs that already exist and are already governed:
 - The internal LLM gateway, for document enrichment
 - A localhost model server or the local `claude` CLI, for on-device enrichment
 
-All capture data at rest lives in the reporter's own IndexedDB. All capture data in
-motion goes either to a tracker the organisation already runs, or to a model
-endpoint the organisation already governs, or nowhere at all.
+**The reporter's own IndexedDB is the only durable store this product controls in
+Phase 0.** Capture content can also come to rest in destinations we do not
+operate — a GitHub or GitLab issue, an internal LLM gateway's own logs, a
+support-ticket attachment from the export flow ([ADR-013](ADR-013-recording-links-two-stage.md)) — and those destinations govern their own
+retention, access, and audit under whatever policy already applies to them. This
+ADR does not, and cannot, make claims about that data once it has left for a
+system we don't operate.
 
 The dividing line is operational ownership: we add no new place where capture data
-comes to rest under our control.
+comes to rest under **our** control.
 
 ## Alternatives Considered
 

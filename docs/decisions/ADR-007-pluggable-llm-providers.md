@@ -68,14 +68,39 @@ interface LlmProvider {
 Two implementations, not three. The internal gateway and a localhost model server are
 the same transport with different configuration, so they share one implementation.
 
-Provider selection is policy-controlled per workspace with an ordered fallback chain.
+`NativeMessagingProvider` messages are size-bounded: Chrome caps a single native
+message at 1 MiB each direction. Capture context sent to the host is truncated to
+that budget (deterministic steps plus the highest-signal timeline excerpt, not the
+full raw timeline), and a model response that would exceed it is rejected rather
+than silently truncated — that failure is non-fatal per the rule below, so it just
+falls through to the deterministic document.
+
+Provider selection is policy-controlled per workspace with an ordered fallback
+chain, and **the chain never crosses a workspace's declared privacy boundary.** A
+workspace configured local-only (brand surfaces where capture text may carry
+PHI that survived redaction — see problem 2 above) allow-lists only
+`NativeMessagingProvider` and localhost-configured `HttpProvider` targets; if every
+allow-listed provider fails, the fallback is the deterministic document, never a
+step up to the remote gateway. Falling through to a remote endpoint after a local
+failure would silently cross the boundary the workspace was configured to enforce.
 
 ### Hallucination control
 
-**Every LLM-authored step must cite `eventIds` that exist in the capture timeline.
-Steps citing unknown IDs are dropped before the document is stored — not flagged,
-dropped. If more than half a document's steps fail validation, the entire LLM pass is
-discarded and the deterministic document stands.**
+**Deterministic steps are always kept, unconditionally.** LLM enrichment can only
+add to that floor, never replace it.
+
+An LLM-authored step must satisfy two things, not one: its cited `eventIds` must
+exist in the capture timeline, **and** the step's text must be about what those
+events actually contain — a step describing a network failure needs a cited
+network event whose payload shows a failure, not an unrelated event that merely
+exists nearby in time. Validation is the citation-existence check plus a
+same-provider follow-up prompt that asks the model to justify each step against
+only its cited events' payloads; a step that fails either check is dropped, not
+flagged. **There is no partial-failure threshold** — every LLM step is validated
+independently, and if none survive, the LLM pass is discarded entirely and the
+deterministic document stands alone. (The earlier "more than half" threshold is
+removed: it permitted exactly half of a document's steps to be fabricated and
+still ship.)
 
 ### Failure is always non-fatal
 

@@ -1,4 +1,4 @@
-# ADR-004: One append-only event timeline for console, network, and interaction
+# ADR-004: One append-only capture-event timeline
 
 ## Status
 
@@ -10,29 +10,30 @@ Accepted
 
 ## Context
 
-A capture gathers four streams of ambient browser state: console messages, network
-requests, user interactions, and navigations. The obvious modelling is one store per
-stream — `console_logs`, `network_requests`, `interactions` — mirroring how the
-browser itself exposes them.
+A capture gathers several streams of ambient browser state: console messages,
+network requests, user interactions, navigations, plus internally-generated
+lifecycle markers (state transitions, fidelity changes) and reporter annotations.
+The obvious modelling is one store per stream — `console_logs`, `network_requests`,
+`interactions` — mirroring how the browser itself exposes them.
 
 But every consumer of this data needs them interleaved:
 
 - **Playback** scrubs a video and must show what was happening at that instant
-  across all four streams.
+  across every stream.
 - **Step generation** (deterministic and LLM) reads a chronological narrative:
   clicked, then request failed, then error logged.
 - **MCP export** hands an agent an ordered account of what happened.
-- **The viewer's timeline** is one visual track, not four.
+- **The viewer's timeline** is one visual track, not several.
 
 With separate stores, every one of those consumers implements its own merge, and
 each merge needs its own answer to "what happens when a console message and a
-network response share a millisecond?" Four consumers, four chances to answer
+network response share a millisecond?" Several consumers, several chances to answer
 differently, and the bugs that result are ordering bugs — the kind that reproduce
 once in fifty runs.
 
 ## Decision
 
-**One append-only log, `capture_event`, holds all four kinds in a single ordered
+**One append-only log, `capture_event`, holds every kind in a single ordered
 stream.**
 
 ```ts
@@ -50,8 +51,9 @@ type CaptureEvent = {
 Two properties are load-bearing:
 
 **Ordering is intrinsic.** Monotonic ULIDs (ADR-003) mean lexicographic sort of
-`id` is the canonical order. No consumer merges anything; no consumer needs a
-tiebreaker.
+`id` is the canonical order — the order each source's callback fired in, not
+necessarily true causal order across sources (ADR-003 §Context). No consumer
+merges anything; no consumer needs a tiebreaker.
 
 **Events are immutable.** Once written, an event is never updated or deleted.
 Retention purges an entire capture, not individual events. Redaction happens *before*

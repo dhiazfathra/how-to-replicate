@@ -39,7 +39,7 @@ Downstream of those:
 | Concern | Decision |
 |---|---|
 | Identity | Client-minted ULIDs — a capture is valid before any server knows of it ([003](docs/decisions/ADR-003-client-minted-ulids.md)) |
-| Event model | One append-only timeline for console, network, and interaction ([004](docs/decisions/ADR-004-append-only-event-timeline.md)) |
+| Event model | One append-only timeline for console, network, interaction, navigation, lifecycle, and annotation events ([004](docs/decisions/ADR-004-append-only-event-timeline.md)) |
 | Redaction | Client-side, primary, fail-closed. Video blur composited **pre-encode** ([005](docs/decisions/ADR-005-fail-closed-redaction-gate.md)) |
 | Capture | CDP primary, marked fallback on DevTools detach ([006](docs/decisions/ADR-006-client-side-capture-via-cdp.md)) |
 | Documents | Deterministic generation always; LLM enrichment validated against the timeline ([007](docs/decisions/ADR-007-pluggable-llm-providers.md)) |
@@ -69,7 +69,7 @@ compliance incident.
 
 ## Planned layout
 
-```
+```text
 clients/
   extension/          MV3 extension (TS)
   viewer/             capture viewer — shared by extension and web

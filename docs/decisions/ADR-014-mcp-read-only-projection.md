@@ -55,7 +55,13 @@ Exposed resources:
 - The event timeline, filterable by kind and time range
 - Network requests, with redaction already applied
 - Environment snapshot and SDK-injected metadata
-- Asset references as short-lived signed URLs (ADR-011)
+- Asset references as short-lived signed URLs (ADR-011), **issued only through the
+  MCP gateway itself** — the URL a resource read returns is minted by `mcp-gateway`
+  at read time, scoped to that agent identity and that read. It is not a bare
+  object-storage URL an agent could stash and reuse outside the MCP boundary; the
+  RBAC check, the `ready`-state gate, and the audit entry below all happen at
+  mint time, on every read, not once at some earlier point an agent could
+  outlive.
 
 Not exposed: any operation that writes to a capture. An agent that wants to record a
 finding does so where findings belong — a tracker issue via `router`, or a new capture
@@ -64,8 +70,15 @@ existing one.
 
 Additionally:
 
-- **Every MCP read writes an `audit_log` entry** with the resolved agent identity, the
-  capture accessed, and which resources were read.
+- **The `audit_log` write must durably succeed before the resource response
+  returns.** This is a hard ordering, not a best-effort side effect: if the audit
+  append cannot complete — the log store is down, the write times out — the MCP
+  read **fails closed** rather than returning data with an unlogged access.
+  Bounded retry with backoff covers transient failures; a durable outbox is the
+  escape hatch if the audit store's own availability ever becomes the
+  bottleneck. The alternative — logging asynchronously after the fact — would
+  make "every MCP read is audited" an aspiration rather than a guarantee, exactly
+  the property this decision exists to have.
 - **Only `state === 'ready'` captures are visible**, same gate as every other consumer
   (ADR-005). Redaction has completed or the capture does not exist as far as MCP is
   concerned.
