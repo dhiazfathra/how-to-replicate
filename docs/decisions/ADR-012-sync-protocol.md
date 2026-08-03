@@ -198,10 +198,27 @@ enqueues. Rollback occurs only on explicit server rejection.
   (ADR-009) rather than a separate unbounded allocation — the queue is small scalar
   writes, so this cap is generous relative to how a workspace could plausibly
   fill it through normal use. At the cap, new local edits still apply to the
-  observable store (the UI never blocks), but enqueueing for sync stops and the UI
-  shows a persistent "N changes waiting to sync" indicator rather than silently
-  dropping the oldest entries. The user's recourse is reconnecting, not losing
-  work — a full queue is a signal to get back online, not a data-loss event.
+  observable store (the UI never blocks); what happens to the pending mutation
+  differs by operation, because a bare "stop enqueueing" would silently strand
+  edits with nothing to sync once reconnected:
+  - `set` and `assign` **coalesce**: a second edit to a field that already has a
+    queued mutation overwrites that mutation's `value`/`clientTs` in place rather
+    than appending a new entry. This is safe because these fields are
+    last-write-wins scalars anyway (§Conflict resolution) — only the newest value
+    for a given field is ever going to win, so there is nothing lost by
+    collapsing the queue to just that value before it even reaches the server.
+    Coalescing is what keeps the queue bounded under repeated edits to the same
+    few fields, which is the common case (re-titling a capture several times
+    before reconnecting).
+  - `append` (comments) **cannot** coalesce — collapsing two comments would
+    discard one. So a comment made at the cap is queued only if it fits within
+    the cap; if it doesn't, the UI blocks *new comments specifically* (not other
+    edits) with an explicit "sync queue full — reconnect to add more comments"
+    message, rather than accepting the comment and then silently failing to send
+    it.
+  - The UI shows a persistent "N changes waiting to sync" indicator throughout.
+    The user's recourse is reconnecting, not losing work — a full queue is a
+    signal to get back online, not a data-loss event.
 - **Partial sync is a real state.** Metadata synced, assets pending. The UI must
   distinguish "synced" from "synced except the video", and eviction (ADR-009) must
   respect the difference or it will delete an unbacked video.
