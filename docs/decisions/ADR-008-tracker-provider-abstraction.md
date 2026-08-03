@@ -79,15 +79,33 @@ others.
 
 Token handling:
 
-- Access tokens in `chrome.storage.session` — cleared on browser exit.
-- Refresh tokens encrypted at rest in `chrome.storage.local`.
+- Access tokens in `chrome.storage.session` — cleared on browser exit, plaintext is
+  acceptable there since the value doesn't survive past the current browser
+  session anyway.
+- Refresh tokens encrypted at rest in `chrome.storage.local`, because unlike the
+  access token this one **does** survive browser restarts and is the higher-value
+  target. The encryption key is derived via WebCrypto's `AES-GCM`, generated
+  on first authorization and itself stored as a non-extractable `CryptoKey` in
+  `chrome.storage.session` — so the key never exists in a form that can be read
+  out of storage, copied, or exfiltrated as bytes; it dies with the browser
+  session exactly like the access token. This means a refresh token is only ever
+  decryptable while the browser session that created it is still open — on
+  restart, the encrypted blob in `.local` is unreadable and the user must
+  re-authorize. That's a deliberate trade: no durable key material to protect or
+  rotate, at the cost of re-authorizing more often than a "silently refresh
+  forever" design would.
+- Revocation is the tracker's own OAuth revocation endpoint (GitHub/GitLab both
+  support token revocation), called on explicit sign-out and offered as an
+  org-admin action — revoking there invalidates the token network-side
+  regardless of what's cached locally, which is what actually matters for a lost
+  or compromised device.
 - No credential is ever typed by the user into the extension.
 - Both storage areas are reachable by content scripts by default. Neither token
-  needs to be, so the background service worker calls
+  (nor the wrapping key) needs to be, so the background service worker calls
   `chrome.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' })` (and
   the equivalent for `.local`) at startup, restricting both areas to the
   extension's own pages and service worker. A compromised content script on a
-  captured page then cannot read either token.
+  captured page then cannot read either token or the key.
 
 Routing payload: the replication document as issue body, video and screenshots as
 attachments, a deep link back to the capture, and structured labels derived from
