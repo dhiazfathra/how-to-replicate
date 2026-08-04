@@ -1,0 +1,61 @@
+import type { Capture } from '../types/capture.js';
+import type { CaptureEvent } from '../types/event.js';
+import type { GenerateDocOptions } from '../steps/generate.js';
+import type { ReplicationDoc } from '../types/doc.js';
+import type { InstantReplay } from '../buffer/instant-replay.js';
+import type { CaptureRepository } from '../storage/repository.js';
+import { generateDoc } from '../steps/generate.js';
+import { transition } from './machine.js';
+
+export type DocGenerator = (events: CaptureEvent[], opts?: GenerateDocOptions) => ReplicationDoc;
+
+export type FinalizeCaptureOptions = {
+  capture: Capture;
+  buffer: InstantReplay;
+  repo: CaptureRepository;
+  docGenerator?: DocGenerator;
+};
+
+/**
+ * Land a capture in `ready` (or `failed` on a fatal error). Does not
+ * re-apply the ruleset: Task 6's InstantReplay redacts on ingest, so
+ * `buffer.events()` already holds redacted events — a second redaction pass
+ * here would be redundant and a second place for the two passes to disagree.
+ *
+ * A redaction *drop* (buffer.withheldEventCount()) is a successful
+ * fail-closed outcome and does not stop the capture reaching `ready`. Only a
+ * fatal pipeline error — persistence failure, doc-gen crash, an unreadable
+ * buffer — lands the capture in `failed`, where it is not viewable.
+ */
+export async function finalizeCapture(options: FinalizeCaptureOptions): Promise<Capture> {
+  const { capture, buffer, repo } = options;
+  const docGenerator = options.docGenerator ?? generateDoc;
+
+  try {
+    const events = buffer.events();
+    const withheldEventCount = buffer.withheldEventCount();
+    await repo.appendEvents(capture.id, events);
+    const doc = docGenerator(events, { assets: capture.assets });
+
+    const composed: Capture = {
+      ...capture,
+      doc,
+      withheldEventCount,
+      fidelity: withheldEventCount > 0 ? 'degraded' : capture.fidelity,
+    };
+
+    const { capture: ready, event } = transition(composed, 'ready');
+    await repo.appendEvents(capture.id, [event]);
+    await repo.putCapture(ready);
+    return ready;
+  } catch (error) {
+    const { capture: failed, event } = transition(capture, 'failed', errorMessage(error));
+    await repo.putCapture(failed).catch(() => undefined);
+    await repo.appendEvents(capture.id, [event]).catch(() => undefined);
+    return failed;
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}

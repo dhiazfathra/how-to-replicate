@@ -19,3 +19,8 @@ export * from './buffer/instant-replay.js';
 export * from './steps/naming.js';
 export * from './steps/noise.js';
 export * from './steps/generate.js';
+export * from './pipeline/machine.js';
+export * from './pipeline/gate.js';
+export * from './pipeline/run.js';
+export * from './export/markdown.js';
+export * from './export/htr.js';
