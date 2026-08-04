@@ -31,3 +31,21 @@ jobs:
 
       - name: Test with coverage
         run: pnpm test:coverage
+
+  redaction-corpus:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Golden synthetic-PHI redaction corpus
+        run: pnpm vitest run packages/capture-core/test/redaction-corpus.test.ts
