@@ -95,6 +95,9 @@ Create the workspace every later task builds in. No product logic.
   installed pnpm) with scripts: `lint`, `typecheck`, `test`, `test:coverage`,
   `build`, `check:deps`.
 - `pnpm-workspace.yaml` covering `packages/*` and `clients/*`.
+- **`pnpm-lock.yaml`, committed.** CI runs `pnpm install --frozen-lockfile`, which
+  fails on a clean checkout without it. Generate it in this task and commit it;
+  the verification step below is what proves it is complete.
 - `tsconfig.base.json`: `strict: true`, `target: "esnext"`, `module: "esnext"`,
   `moduleResolution: "bundler"`, `noUncheckedIndexedAccess: true`,
   `exactOptionalPropertyTypes: true`, `verbatimModuleSyntax: true`,
@@ -118,7 +121,7 @@ Create the workspace every later task builds in. No product logic.
   `pnpm check:deps`, `pnpm test:coverage`. Every step must be blocking.
 - `.gitignore` additions for `node_modules`, `dist`, `coverage`.
 
-**Verification:** `pnpm install && pnpm lint && pnpm typecheck && pnpm check:deps && pnpm test:coverage` all exit 0.
+**Verification:** `pnpm install --frozen-lockfile && pnpm lint && pnpm typecheck && pnpm check:deps && pnpm test:coverage` all exit 0. Use the frozen form, not a bare `pnpm install` — it is what CI runs, and it is the only form that proves the committed lockfile is complete.
 
 ---
 
@@ -131,32 +134,32 @@ compute time. No redaction, no storage.
 
 - `types/capture.ts` — transcribe verbatim from spec §5.1:
 
-```ts
-type CaptureState =
-  | 'recording' | 'redacting' | 'composing' | 'ready' | 'failed' | 'expired';
+  ```ts
+  type CaptureState =
+    | 'recording' | 'redacting' | 'composing' | 'ready' | 'failed' | 'expired';
 
-type Capture = {
-  id: string;
-  workspaceId: string | null;
-  projectId: string | null;
-  source: 'extension' | 'recording-link' | 'sdk' | 'cli' | 'ios';
-  state: CaptureState;
-  fidelity: 'full' | 'degraded';
-  createdAt: string;
-  epoch: number;
-  env: EnvSnapshot;
-  metadata: Record<string, JsonValue>;
-  doc: ReplicationDoc | null;
-  assets: AssetRef[];
-  withheldEventCount: number;
-  sync: {
-    revision: number;
-    lastPushedAt: string | null;
-    manifestComplete: boolean;
-    dirtyFields: string[];
+  type Capture = {
+    id: string;
+    workspaceId: string | null;
+    projectId: string | null;
+    source: 'extension' | 'recording-link' | 'sdk' | 'cli' | 'ios';
+    state: CaptureState;
+    fidelity: 'full' | 'degraded';
+    createdAt: string;
+    epoch: number;
+    env: EnvSnapshot;
+    metadata: Record<string, JsonValue>;
+    doc: ReplicationDoc | null;
+    assets: AssetRef[];
+    withheldEventCount: number;
+    sync: {
+      revision: number;
+      lastPushedAt: string | null;
+      manifestComplete: boolean;
+      dirtyFields: string[];
+    };
   };
-};
-```
+  ```
 
   `sync` is inert in Phase 0 — present in the type, initialized to
   `{ revision: 0, lastPushedAt: null, manifestComplete: false, dirtyFields: [] }`,
@@ -164,21 +167,21 @@ type Capture = {
 
 - `types/event.ts` — transcribe verbatim from spec §5.2:
 
-```ts
-type CaptureEvent = {
-  id: string;
-  captureId: string;
-  t: number;
-  kind: 'console' | 'network' | 'interaction' | 'navigation'
-      | 'lifecycle' | 'annotation';
-  payload: ConsolePayload | NetworkPayload | InteractionPayload
-         | NavigationPayload | LifecyclePayload | AnnotationPayload;
-  redaction: {
-    rulesApplied: string[];
-    fidelity: 'full' | 'redacted' | 'dropped';
+  ```ts
+  type CaptureEvent = {
+    id: string;
+    captureId: string;
+    t: number;
+    kind: 'console' | 'network' | 'interaction' | 'navigation'
+        | 'lifecycle' | 'annotation';
+    payload: ConsolePayload | NetworkPayload | InteractionPayload
+           | NavigationPayload | LifecyclePayload | AnnotationPayload;
+    redaction: {
+      rulesApplied: string[];
+      fidelity: 'full' | 'redacted' | 'dropped';
+    };
   };
-};
-```
+  ```
 
   Define all six payload types. Minimum shapes:
   - `ConsolePayload`: `{ level: 'log'|'info'|'warn'|'error'|'debug'; text: string; stack: string | null }`
@@ -216,23 +219,23 @@ repository. Fail closed everywhere.
 
 - `ruleset.ts` — the versioned ruleset type and its parser:
 
-```ts
-type RuleClass =
-  | 'field-path' | 'header' | 'pattern' | 'dom-selector' | 'video-blur' | 'origin-allow';
+  ```ts
+  type RuleClass =
+    | 'field-path' | 'header' | 'pattern' | 'dom-selector' | 'video-blur' | 'origin-allow';
 
-type RedactionRule =
-  | { id: string; class: 'field-path'; pointer: string }        // RFC 6901-ish, `*` wildcard segment
-  | { id: string; class: 'header'; name: string }               // case-insensitive
-  | { id: string; class: 'pattern'; pattern: string; flags?: string; label: string }
-  | { id: string; class: 'dom-selector'; selector: string }
-  | { id: string; class: 'video-blur'; selector: string }
-  | { id: string; class: 'origin-allow'; origins: string[] };
+  type RedactionRule =
+    | { id: string; class: 'field-path'; pointer: string }        // RFC 6901-ish, `*` wildcard segment
+    | { id: string; class: 'header'; name: string }               // case-insensitive
+    | { id: string; class: 'pattern'; pattern: string; flags?: string; label: string }
+    | { id: string; class: 'dom-selector'; selector: string }
+    | { id: string; class: 'video-blur'; selector: string }
+    | { id: string; class: 'origin-allow'; origins: string[] };
 
-type RedactionRuleset = {
-  version: string;
-  rules: RedactionRule[];
-};
-```
+  type RedactionRuleset = {
+    version: string;
+    rules: RedactionRule[];
+  };
+  ```
 
   `parseRuleset(input: unknown): RedactionRuleset` throws on anything malformed —
   never silently drops an unparseable rule, because a dropped rule is a hole.
@@ -240,31 +243,43 @@ type RedactionRuleset = {
 
 - `engine.ts` — `createRedactor(ruleset)` returning:
 
-```ts
-type Redactor = {
-  redactEvent(event: CaptureEvent): RedactionOutcome;
-  isOriginAllowed(origin: string): boolean;
-  blurSelectors(): string[];
-};
+  ```ts
+  type Redactor = {
+    redactEvent(event: CaptureEvent): RedactionOutcome;
+    isOriginAllowed(origin: string): boolean;
+    blurSelectors(): string[];
+  };
 
-type RedactionOutcome =
-  | { fidelity: 'full' | 'redacted'; event: CaptureEvent }
-  | { fidelity: 'dropped'; ruleId: string; reason: string };
-```
+  type RedactionOutcome =
+    | { fidelity: 'full' | 'redacted'; event: CaptureEvent }
+    | { fidelity: 'dropped'; ruleId: string; reason: string };
+  ```
 
   Behaviour, all of it mandatory:
   - Redaction is **pure and total**: given the same event and ruleset it returns
     the same outcome, and it never throws. Any internal error is caught and
-    converted to `{ fidelity: 'dropped' }` — an error must never let an event
-    through unredacted.
+    converted to a drop — an error must never let an event through unredacted.
+    A drop always carries both fields the type demands: when a specific rule
+    caused it, its `ruleId`; when the engine itself failed, the reserved
+    `ruleId: 'engine:internal-error'` and a **sanitized** `reason` naming the
+    failing stage only. The reason string must never quote payload content —
+    an error message that echoes the value it choked on is a leak wearing a
+    diagnostic hat.
   - **field-path** — walk JSON request/response bodies by pointer; `*` matches one
     path segment. Replace the matched value with `'[REDACTED]'`. A body that does
     not parse as JSON is not exempt: it falls through to pattern scanning.
   - **header** — case-insensitive name match on request and response headers;
     value replaced with `'[REDACTED]'`.
-  - **pattern** — applied to every string value reachable in the payload
-    (console text, URLs, header values, body strings, interaction values,
-    annotation text). Replace the match with `'[REDACTED:<label>]'`.
+  - **pattern** — applied to every string reachable in the payload, **keys as
+    well as values** (console text, URLs, header values, body strings,
+    interaction values, annotation text, and every JSON object key along the
+    way). Replace the match with `'[REDACTED:<label>]'`.
+    Keys need explicit handling because redacting one can collide with a
+    sibling: `{"0812...": 1, "0813...": 2}` would collapse to one entry. So a
+    key rewrite is **collision-safe** — on collision, suffix the replacement
+    with the key's ordinal position (`'[REDACTED:phone-id]#2'`) rather than
+    overwriting. Dropping one of two colliding entries is silent data loss;
+    merging them is worse, because it fabricates a payload that never existed.
   - **dom-selector** — applied to captured DOM text carried in interaction
     payloads (`targetName`, `value`): a payload whose `targetSelector` matches a
     masked selector has its text fields replaced with `'[REDACTED]'`.
@@ -310,14 +325,23 @@ The most important test asset in the repository (spec §18). It gates every PR.
     `value`, navigation URLs, and annotation text.
   - Adversarial shapes: PHI split across a truncation boundary, PHI in a
     non-JSON body, PHI in a content type not on the allow-list, PHI in a key
-    rather than a value, unicode-escaped PHI, and PHI in a URL fragment.
+    rather than a value, **two sibling keys whose redacted forms collide**,
+    unicode-escaped PHI, and PHI in a URL fragment.
+    The key-position fixtures are covered by Task 3's collision-safe key
+    rewriting. If that rewriting is not implemented, these fixtures fail —
+    which is the intended outcome, not a fixture to delete.
 - `packages/capture-core/test/corpus/index.ts` — loads fixtures and exports the
   list of **forbidden strings** (every synthetic PHI literal used).
 - `packages/capture-core/test/redaction-corpus.test.ts` — runs each fixture event
   through the redactor with the standard ruleset and asserts **zero leakage**: no
   forbidden string appears anywhere in the serialized outcome (including
-  `rulesApplied`, and including dropped-event metadata). Dropping counts as a
-  pass; leaking does not.
+  `rulesApplied`, including dropped-event metadata, and including **object keys**,
+  so serialize with a walker that visits keys rather than relying on
+  `JSON.stringify` alone). Dropping counts as a pass; leaking does not.
+- A companion assertion that key redaction is **non-destructive**: for the
+  colliding-sibling fixture, assert the redacted object still has the same number
+  of keys as the original. A rewrite that silently merges two entries passes a
+  naive leak check while fabricating a payload that never existed.
 - A companion assertion that the corpus is non-trivial: fail the test if the
   forbidden-string list is empty or if any fixture produces `fidelity: 'full'`
   when it contains PHI — a fixture that no rule touches is a hole in the ruleset,
@@ -377,6 +401,12 @@ persistence request when the API is absent.
   hydrates from the repository, exposes `captures` as observable records, and
   applies mutations **locally and synchronously** before any persistence. No
   Phase 0 mutation queue — persistence is a direct repository write.
+  **Persistence-failure contract:** the local write happens first, so a failed
+  repository write would otherwise leave the UI showing a value that vanishes on
+  reload. It does **not** roll back — rollback would discard the user's edit for
+  a fault they did not cause. Instead the field is marked dirty with the error,
+  the store exposes it (`persistError`), and the viewer surfaces it. Lost
+  persistence is visible, on the same principle as invariant 4.
 - `packages/capture-core/src/buffer/ring.ts` — `createRingBuffer({ maxEvents, maxBytes })`
   capped by count **and** bytes, defaults **20 000 events / 8 MB**, evicting oldest
   first. `push(event)` returns the evicted events. Byte size is measured on the
@@ -388,7 +418,9 @@ persistence request when the API is absent.
   a bounded deque of `MediaRecorder` video chunks with a window of **120 seconds**,
   releasing chunks past the window.
 
-**Tests:** eviction by count and by bytes independently and together, the
+**Tests:** a failing repository write leaves the local value in place, marks the
+field dirty, and exposes `persistError` (assert it does **not** roll back);
+eviction by count and by bytes independently and together, the
 no-notify-on-equal path, subscription teardown, ingest-time redaction (assert a
 raw PHI string is never observable in the buffer), video-chunk window release.
 
@@ -433,9 +465,19 @@ artifacts.
   `redacting` and `composing`, and `expired` from `ready`. Every other transition
   throws. Each transition appends a `lifecycle` event to the timeline.
 - `packages/capture-core/src/pipeline/run.ts` — `finalizeCapture({ capture, buffer, repo, docGenerator })`:
-  applies the ruleset to every buffered event, persists, generates the document,
-  and lands in `ready`. Any redaction failure lands in `failed` and the capture is
-  **not viewable**. Sets `withheldEventCount` from the drop count.
+  persists the buffered events, generates the document, and lands in `ready`.
+  **It does not re-apply the ruleset.** Task 6 redacts on ingest, so the buffer
+  already holds redacted events — that is the whole point of paying the
+  continuous-redaction cost, and re-running here would be both redundant and a
+  second place for the two passes to disagree. Hence no `redactor` or `ruleset`
+  parameter in the signature.
+  `withheldEventCount` is read from the **ingest** drop count the buffer already
+  accumulated, not recomputed.
+  Distinguish the two failure kinds, because Task 3 defines them differently:
+  a **dropped event** is a successful fail-closed outcome and leaves the capture
+  on the path to `ready`; only a **fatal pipeline error** (persistence failure,
+  document generation crash, a buffer that cannot be read) lands in `failed`,
+  where the capture is **not viewable**.
 - `packages/capture-core/src/pipeline/gate.ts` — `assertReady(capture)` /
   `isViewable(capture)`. **Every** export, share, and route path in this repository
   calls the gate. Export it from the package index so no client can bypass it by
@@ -450,10 +492,13 @@ artifacts.
   compression) ZIP writer** — no new dependency. Both export functions call the
   gate first and throw on a non-`ready` capture.
 
-**Tests:** every illegal transition throws; a redaction failure produces `failed`
-and `isViewable === false`; export from every non-`ready` state throws; the
-markdown snapshot includes the degraded notice and withheld count; the `.htr`
-bundle round-trips through a standard unzip.
+**Tests:** every illegal transition throws; a buffer containing dropped events
+still reaches `ready` with `withheldEventCount` matching the ingest count (drops
+are not failures); a fatal pipeline error produces `failed` and
+`isViewable === false`; `finalizeCapture` is asserted not to invoke a redactor
+at all; export from every non-`ready` state throws; the markdown snapshot
+includes the degraded notice and withheld count; the `.htr` bundle round-trips
+through a standard unzip.
 
 ---
 
@@ -464,18 +509,40 @@ only.
 
 **Deliverables**
 
-- `src/provider.ts` — one interface both transports satisfy:
-  `type LlmProvider = { name: string; complete(req: { prompt: string; timeoutMs: number }): Promise<string> }`.
+- `src/provider.ts` — one interface both transports satisfy, carrying the
+  locality that `selectProvider` has to enforce:
+
+```ts
+type ProviderTarget = 'localhost' | 'native-messaging' | 'remote';
+
+type LlmProvider = {
+  name: string;
+  target: ProviderTarget;
+  complete(req: { prompt: string; timeoutMs: number }): Promise<string>;
+};
+```
+
+  `target` is **derived by the factory, never accepted from configuration** — a
+  caller that could label a remote gateway `'localhost'` would defeat the entire
+  local-only guarantee. It is the one field the policy layer trusts.
 - `src/http-provider.ts` — `createHttpProvider({ baseUrl, apiKey?, model, fetch? })`,
   posting an OpenAI-compatible chat-completions request. Injectable `fetch`.
+  Derives `target` by parsing `baseUrl`: `'localhost'` only for a loopback host
+  (`localhost`, `127.0.0.0/8`, `[::1]`), otherwise `'remote'`. A hostname that
+  merely *looks* local (`localhost.example.com`, a name that resolves to
+  loopback) is `'remote'` — matching on the parsed host, not on a substring.
 - `src/native-messaging-provider.ts` — `createNativeMessagingProvider({ connect, hostName })`
   over `chrome.runtime.connectNative`. The `connect` function is injected so the
-  package never touches `chrome` directly and stays testable in node.
+  package never touches `chrome` directly and stays testable in node. `target` is
+  always `'native-messaging'`.
 - `src/policy.ts` — `selectProvider(policy, providers)` implementing an ordered
   fallback chain. **A local-only workspace never falls back to a remote target**:
-  when `policy.localOnly` is true, only providers whose target is localhost or
-  native messaging are eligible, and a local-provider failure ends the chain — it
-  never crosses into a remote call.
+  when `policy.localOnly` is true, the chain is filtered to providers whose
+  `target` is `'localhost'` or `'native-messaging'` **before** selection, so a
+  remote provider is never reachable — not first, not as fallback. A
+  local-provider failure ends the chain and returns no provider; it never
+  crosses into a remote call. A provider whose `target` the policy layer cannot
+  read is treated as `'remote'`.
 - `src/enrich.ts` — `enrichDoc({ doc, events, provider })`:
   - Deterministic steps are kept **unconditionally**; enrichment only adds.
   - Every LLM-authored step must cite `eventIds` that **exist in the timeline**
@@ -495,7 +562,10 @@ only.
 fabricated step is dropped; a response citing real IDs but describing something
 the events do not contain is also dropped; zero-survivors discards the pass;
 provider timeout, network error, and malformed JSON are all non-fatal; the
-local-only policy never selects or falls back to a remote provider.
+local-only policy never selects or falls back to a remote provider, including
+when a remote provider is first in the chain and every local one has failed;
+`createHttpProvider` derives `target: 'remote'` for `localhost.example.com` and
+for a public host, and `'localhost'` only for real loopback forms.
 
 ---
 
@@ -528,15 +598,41 @@ type TrackerProvider = {
   exchange, no client secret.
 - `src/token-store.ts` — access tokens go to `chrome.storage.session`; refresh
   tokens are **encrypted at rest** in `chrome.storage.local` using WebCrypto
-  AES-GCM with a key derived per install. Both storages are injected as interfaces
-  so the package is node-testable and holds no direct `chrome` reference.
+  AES-GCM. Both storages are injected as interfaces so the package is
+  node-testable and holds no direct `chrome` reference.
+  The key and nonce lifecycle is specified, not left to the implementer, because
+  every one of these choices is a way to lose or leak a refresh token:
+  - **Key material:** a non-extractable `CryptoKey` from
+    `crypto.subtle.generateKey({ name: 'AES-GCM', length: 256 })`, generated once
+    per install. Non-extractable means a compromised content script cannot read
+    it out even with storage access.
+  - **Key persistence:** stored as a `CryptoKey` in `chrome.storage.local`
+    (structured-cloneable, so it survives service-worker restarts without ever
+    being serialized to raw bytes). The MV3 service worker is evicted constantly;
+    an in-memory-only key would log the user out on every idle timeout.
+  - **Nonce:** a fresh 96-bit `crypto.getRandomValues` IV **per encryption**,
+    stored alongside the ciphertext. Never derived, never reused, never a
+    counter — GCM nonce reuse under one key is a catastrophic failure, not a
+    degraded one.
+  - **Rotation:** on every successful refresh-token rotation the token is
+    re-encrypted under a newly generated key and the old key is discarded. There
+    is no key-history store to search.
+  - **Decryption failure** (corrupt ciphertext, missing key after a partial wipe,
+    GCM tag mismatch) discards the stored refresh token and forces
+    re-authorization. It never falls back to plaintext and never retries with a
+    different key.
 - `src/labels.ts` — label derivation from `projectId` and error signatures.
 - Routing must call `capture-core`'s ready gate before building a payload.
 
 **Tests:** contract tests against **recorded** GitHub/GitLab API fixtures (checked
 in as JSON, served through an injected `fetch`). Cover the full device-flow poll
-sequence including `slow_down`, PKCE verifier/challenge derivation, encryption
-round-trip, and a non-`ready` capture being refused.
+sequence including `slow_down`, PKCE verifier/challenge derivation, and a
+non-`ready` capture being refused. For the token store specifically: an
+encryption round-trip; the key surviving a simulated service-worker restart;
+two encryptions of the same plaintext producing different IVs and different
+ciphertext; rotation discarding the previous key; and each decryption-failure
+mode (corrupt ciphertext, absent key, tag mismatch) discarding the token and
+forcing re-authorization rather than returning anything.
 
 ---
 

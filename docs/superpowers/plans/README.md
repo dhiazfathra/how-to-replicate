@@ -14,9 +14,21 @@ section that binds every task in it.
 
 ## How to read a plan
 
-Read the Global Constraints section first, then the one task you are working on.
-Nothing else. Exact values — thresholds, formats, magic strings — live in the
-task text and are meant to be used verbatim.
+Read, in this order:
+
+1. The plan's **Global Constraints** section.
+2. **Your one task.** Not the other tasks — a task brief is written to stand alone.
+3. Anything your task **names**: a dependency plan's task it builds on, a shared
+   asset it must agree with (the redaction corpus, the golden timeline fixtures),
+   or an ADR it cites.
+
+Stop there. The point of (2) is that you should not need to read a whole plan to
+implement one task — not that upstream context is off limits. Several tasks
+depend on agreeing exactly with work from an earlier phase, and the conformance
+suites only mean something if you have read what you are conforming to.
+
+Exact values — thresholds, formats, magic strings — live in the task text and are
+meant to be used verbatim.
 
 ## Invariants accumulate
 

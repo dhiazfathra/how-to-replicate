@@ -18,7 +18,7 @@ Any feature that does not improve the fidelity of the replication document, or
 the speed with which it reaches a human or an agent, is out of scope. This
 applies with particular force to Task 4 — see invariant 17.
 
-### Invariants — all thirteen prior ones still bind
+### Invariants — all fourteen prior ones still bind
 
 1. No unredacted capture is viewable, exportable, or routable. Gate is
    `state === 'ready'`.
@@ -38,23 +38,23 @@ applies with particular force to Task 4 — see invariant 17.
 
 ### Invariants added by Phase 3
 
-15. **iOS captures are `fidelity: 'degraded'` by definition.** No CDP equivalent
-    exists on iOS, so network and console capture require SDK-level
-    instrumentation of the app's HTTP client and will always be partial. Every
-    iOS capture is stamped degraded and labelled as such in the viewer. Do not
-    add a code path that stamps an iOS capture `full`, however complete the
-    instrumentation gets.
-16. **Redaction runs on-device, with the same ruleset format.** The iOS client is
-    a client we control (invariant 9): nothing unredacted is transmitted, and the
-    ruleset bundle is the same versioned format the browser uses — not a
-    reimplementation with its own rule vocabulary.
-17. **Pattern detection reads captures; it does not become session-replay
-    analytics.** Heatmaps, funnels, and cohort analysis are explicit non-goals
-    (spec §3). Detection groups existing captures by shared failure signature.
-    If a proposed feature would work on users who never filed a capture, it is
-    out of scope.
-18. **No native Android capture.** Not planned (spec §3). Do not add it, do not
-    abstract "for Android later".
+- **15. iOS captures are `fidelity: 'degraded'` by definition.** No CDP
+  equivalent exists on iOS, so network and console capture require SDK-level
+  instrumentation of the app's HTTP client and will always be partial. Every
+  iOS capture is stamped degraded and labelled as such in the viewer. Do not
+  add a code path that stamps an iOS capture `full`, however complete the
+  instrumentation gets.
+- **16. Redaction runs on-device, with the same ruleset format.** The iOS client
+  is a client we control (invariant 9): nothing unredacted is transmitted, and
+  the ruleset bundle is the same versioned format the browser uses — not a
+  reimplementation with its own rule vocabulary.
+- **17. Pattern detection reads captures; it does not become session-replay
+  analytics.** Heatmaps, funnels, and cohort analysis are explicit non-goals
+  (spec §3). Detection groups existing captures by shared failure signature.
+  If a proposed feature would work on users who never filed a capture, it is
+  out of scope.
+- **18. No native Android capture.** Not planned (spec §3). Do not add it, do
+  not abstract "for Android later".
 
 ### Conventions
 
@@ -186,9 +186,20 @@ everywhere downstream, except in its honestly-degraded fidelity.
 - The host app syncs through the **existing** `sync-gateway` protocol from
   Phase 1 — same mutation vocabulary, same client-minted ULIDs, same asset upload
   with manifest verification. No iOS-specific ingest endpoint.
-- A mutation queue with the same durability guarantees as the browser's: survives
-  app termination, capped, with a visible pending-sync indicator rather than
-  silent overflow.
+- A mutation queue with the same durability guarantees as the browser's, and the
+  same **cap contract** — the browser's rule from Phase 1 Task 7 applies verbatim,
+  not loosely:
+  - Survives app termination. Same caps: **5 000 mutations / 5 MB**.
+  - **Capacity is checked before the local mutation is applied.** At the cap the
+    edit is **rejected** and the previous value stands; nothing is queued and
+    then dropped. iOS makes this sharper than the browser does — the OS
+    terminates backgrounded apps routinely, so an edit that lives only in memory
+    while the queue is full is lost more often, not less.
+  - **No eviction of queued mutations, ever.** A queue is not a cache; the
+    oldest pending mutation is the one most likely to be the user's real intent.
+  - The pending-sync indicator shows depth as it approaches the cap, so refusal
+    is never the user's first warning, and states plainly that edits are paused
+    until sync catches up.
 - Viewer support in `clients/viewer`: an iOS capture renders its timeline,
   document, and video like any other, with the `fidelity: 'degraded'` badge
   prominent and a specific explanation that iOS has no CDP equivalent — a
@@ -199,9 +210,11 @@ everywhere downstream, except in its honestly-degraded fidelity.
   (invariant 3).
 
 **Tests:** an iOS capture round-trips through sync identically to a browser one;
-the queue survives a simulated app kill; the viewer renders the iOS-specific
-degraded explanation; document generation over an iOS timeline matches the
-shared golden fixtures.
+the queue survives a simulated app kill; **an edit at each cap boundary (the
+5 000th mutation and the 5 MB byte) is refused, and the previous value is still
+there after an OS-initiated termination**; no queued mutation is ever evicted
+under pressure; the viewer renders the iOS-specific degraded explanation;
+document generation over an iOS timeline matches the shared golden fixtures.
 
 ---
 
@@ -223,11 +236,23 @@ not analytics.
 - Cross-**brand-surface** grouping: a cluster spanning multiple `projectId`s is
   the high-value output, because it means one defect is hitting several brands.
   Surface that explicitly rather than leaving it to be noticed.
+- **Clustering never widens anyone's access.** Spanning projects is the feature;
+  spanning *grants* is a disclosure. A cluster is computed **within one
+  workspace** — never across workspaces — and every read of it is filtered to
+  the caller's own grants through Phase 1 RBAC:
+  - Member links, affected-project lists, and counts are filtered per caller, so
+    a viewer with access to one project sees that project's members and not the
+    others'.
+  - The **representative capture** is chosen from captures the caller may read.
+    If the globally best representative is out of reach, pick the best reachable
+    one rather than returning a link that 403s — or worse, a title that leaks.
+  - A cluster with no reachable members is not returned at all, and its existence
+    is not disclosed.
 - Output: a cluster record with member captures, first and last seen, affected
   projects, and a representative capture. **Read-only** over captures — the
   service never mutates one.
 - Viewer surface: a clusters view listing recurring bugs, each linking to its
-  member captures.
+  member captures the caller can actually open.
 - **Explicitly not built:** heatmaps, funnels, cohort analysis, per-user
   journeys, or anything computed over users who filed no capture (spec §3
   non-goals, invariant 17). If a stakeholder asks for one during this task,
@@ -237,6 +262,11 @@ not analytics.
 signature divergence across genuinely different bugs; stack normalization
 stripping volatile parts and keeping stable ones; cross-project cluster
 detection; the service proven to perform no write to capture data.
+**Negative access tests, which are the point of the section above:** a caller
+with access to one project of a three-project cluster sees only their members,
+their count, and a representative from their project; a cluster never spans
+workspaces; a cluster with no reachable member is absent rather than empty, and
+the response is indistinguishable from one where no such cluster exists.
 
 ---
 
