@@ -52,7 +52,11 @@ importers:
         specifier: workspace:*
         version: link:../capture-core
 
-  packages/trackers: {}
+  packages/trackers:
+    devDependencies:
+      '@htr/capture-core':
+        specifier: workspace:*
+        version: link:../capture-core
 
 packages:
 
