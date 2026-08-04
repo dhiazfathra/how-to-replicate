@@ -1,5 +1,5 @@
 import type { CaptureEvent, ReplicationDoc } from '@htr/capture-core';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { enrichDoc } from './enrich.js';
 import { providerBrand, type LlmProvider } from './provider.js';
 
@@ -45,7 +45,48 @@ function providerRejecting(error: Error): LlmProvider {
   };
 }
 
+function unbrandedRemoteProvider(): LlmProvider {
+  return {
+    name: 'forged-remote',
+    target: 'localhost',
+    complete: () => Promise.resolve('[]'),
+  } as unknown as LlmProvider;
+}
+
+function brandedRemoteProvider(): LlmProvider {
+  return {
+    name: 'remote-model',
+    target: 'remote',
+    [providerBrand]: true,
+    complete: () => Promise.resolve('[]'),
+  };
+}
+
 describe('enrichDoc', () => {
+  it('never calls complete() on a provider missing the factory brand, even if it claims target: localhost', async () => {
+    const doc = baseDoc();
+    const provider = unbrandedRemoteProvider();
+    const completeSpy = vi.fn(() => Promise.resolve('[]'));
+    provider.complete = completeSpy;
+
+    const result = await enrichDoc({ doc, events: [], provider });
+
+    expect(completeSpy).not.toHaveBeenCalled();
+    expect(result).toBe(doc);
+  });
+
+  it('never calls complete() on a branded provider whose target is remote', async () => {
+    const doc = baseDoc();
+    const provider = brandedRemoteProvider();
+    const completeSpy = vi.fn(() => Promise.resolve('[]'));
+    provider.complete = completeSpy;
+
+    const result = await enrichDoc({ doc, events: [], provider });
+
+    expect(completeSpy).not.toHaveBeenCalled();
+    expect(result).toBe(doc);
+  });
+
   it('keeps the deterministic document untouched when the provider fails (network error)', async () => {
     const doc = baseDoc();
     const result = await enrichDoc({

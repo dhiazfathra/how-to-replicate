@@ -3,6 +3,7 @@ import { encodeChunk } from '../lib/chunk-codec.js';
 import { startRecorder, type CanvasTarget, type DegradeSink } from './recorder.js';
 import type { MediaRecorderLike } from './timeslice.js';
 import { createBlurRegionsListener, createFrameSource } from './wire.js';
+import { CAPTURE_STOP_MESSAGE_TYPE, type CaptureStopMessage } from '../content/session.js';
 
 /** Adapts the real `MediaRecorder` to the structural `MediaRecorderLike` seam `recorder.ts` drives. */
 function wrapMediaRecorder(stream: MediaStream): MediaRecorderLike {
@@ -14,9 +15,19 @@ function wrapMediaRecorder(stream: MediaStream): MediaRecorderLike {
     start: (timesliceMs) => real.start(timesliceMs),
     stop: () => real.stop(),
     ondataavailable: null,
+    onstop: null,
   };
   real.ondataavailable = (event): void => wrapper.ondataavailable?.({ data: event.data });
+  real.onstop = (): void => wrapper.onstop?.();
   return wrapper;
+}
+
+function isStopMessage(message: unknown): message is CaptureStopMessage {
+  return (
+    typeof message === 'object' &&
+    message !== null &&
+    (message as { type?: unknown }).type === CAPTURE_STOP_MESSAGE_TYPE
+  );
 }
 
 declare const chrome: ChromeAdapter;
@@ -81,6 +92,17 @@ async function main(): Promise<void> {
   );
 
   chrome.runtime.onMessage.addListener(createBlurRegionsListener(captureId, handle));
+
+  // Service-worker's stop() awaits this ack before finalizing the capture —
+  // without it, the recorder's final pending chunk can race document
+  // teardown and be dropped silently (invariant 4).
+  chrome.runtime.onMessage.addListener(
+    (message: unknown, _sender: unknown, sendResponse: (r?: unknown) => void): boolean | void => {
+      if (!isStopMessage(message) || message.captureId !== captureId) return;
+      void handle.stop().then(() => sendResponse(true));
+      return true;
+    },
+  );
 }
 
 void main();

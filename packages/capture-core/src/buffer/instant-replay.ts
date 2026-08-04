@@ -29,7 +29,7 @@ export type InstantReplay = {
   ingest(rawEvent: CaptureEvent): void;
   /** Redaction-caused drops only (invariant 4: lost fidelity must be visible). */
   withheldEventCount(): number;
-  /** Ring-buffer capacity evictions — normal rotation, not a fidelity concern. */
+  /** Ring-buffer capacity evictions. Dropped real events, so pipeline/run.ts folds this into fidelity/withheldEventCount (invariant 4) same as redaction drops. */
   evictedCount(): number;
   events(): CaptureEvent[];
   pushVideoChunk(data: Uint8Array | Blob): void;

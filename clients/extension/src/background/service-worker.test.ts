@@ -325,6 +325,42 @@ describe('createServiceWorker', () => {
     expect(events.some((e) => e.kind === 'lifecycle' && (e.payload as { transition?: string }).transition === 'recording->redacting')).toBe(true);
   });
 
+  it('stop() sends the offscreen document a stop-and-ack message before finalizing, keeping the message listener registered until the ack (or timeout) resolves', async () => {
+    const chromeApi = fakeAdapter({ [MANAGED_RULESET_KEY]: allowedRuleset });
+    const worker = createServiceWorker(chromeApi);
+    await worker.rulesetStore.load();
+    const active = await worker.start('https://allowed.test', target);
+    const captureId = active!.capture.id;
+
+    await worker.stop(active!);
+
+    expect(chromeApi.runtime.sendMessage).toHaveBeenCalledWith({
+      type: CAPTURE_STOP_MESSAGE_TYPE,
+      captureId,
+    });
+  });
+
+  it('stop() degrades fidelity and records a lifecycle handoff event when the offscreen document never acks its stop', async () => {
+    const chromeApi = fakeAdapter({ [MANAGED_RULESET_KEY]: allowedRuleset });
+    (chromeApi.runtime.sendMessage as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('no listener'));
+    const worker = createServiceWorker(chromeApi);
+    await worker.rulesetStore.load();
+    const active = await worker.start('https://allowed.test', target);
+    const captureId = active!.capture.id;
+
+    const result = await worker.stop(active!);
+
+    expect(result.fidelity).toBe('degraded');
+    const db = await openCaptureDb();
+    const repo = new CaptureRepository(db);
+    const events = await repo.readEvents(captureId);
+    expect(
+      events.some(
+        (e) => e.kind === 'lifecycle' && (e.payload as { detail?: string }).detail === 'offscreen-stop-ack-timeout',
+      ),
+    ).toBe(true);
+  });
+
   it('stop() closes the offscreen document so a second capture gets a fresh one with the new captureId (not the stale reused one)', async () => {
     const chromeApi = fakeAdapter({ [MANAGED_RULESET_KEY]: allowedRuleset });
     const worker = createServiceWorker(chromeApi);

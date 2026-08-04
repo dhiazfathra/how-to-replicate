@@ -47,11 +47,11 @@ function makeEvent(id: string): CaptureEvent {
   };
 }
 
-function fakeBuffer(events: CaptureEvent[], withheld: number): InstantReplay {
+function fakeBuffer(events: CaptureEvent[], withheld: number, evicted = 0): InstantReplay {
   return {
     ingest: () => undefined,
     withheldEventCount: () => withheld,
-    evictedCount: () => 0,
+    evictedCount: () => evicted,
     events: () => events,
     pushVideoChunk: () => undefined,
     videoChunks: () => [],
@@ -92,6 +92,27 @@ describe('finalizeCapture', () => {
 
     expect(result.state).toBe('ready');
     expect(result.withheldEventCount).toBe(3);
+    expect(result.fidelity).toBe('degraded');
+  });
+
+  it('folds ring-buffer evictions into withheldEventCount/fidelity too, not just redaction drops', async () => {
+    const repo = await makeRepo();
+    const buffer = fakeBuffer([makeEvent('ev-1')], 0, 2);
+
+    const result = await finalizeCapture({ capture: makeCapture(), buffer, repo });
+
+    expect(result.state).toBe('ready');
+    expect(result.withheldEventCount).toBe(2);
+    expect(result.fidelity).toBe('degraded');
+  });
+
+  it('sums redaction drops and ring-buffer evictions into a single withheldEventCount', async () => {
+    const repo = await makeRepo();
+    const buffer = fakeBuffer([makeEvent('ev-1')], 3, 2);
+
+    const result = await finalizeCapture({ capture: makeCapture(), buffer, repo });
+
+    expect(result.withheldEventCount).toBe(5);
     expect(result.fidelity).toBe('degraded');
   });
 

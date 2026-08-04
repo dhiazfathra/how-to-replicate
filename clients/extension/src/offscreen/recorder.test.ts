@@ -44,12 +44,17 @@ function fakeScheduler(): Scheduler & { step(): void; pending(): boolean; curren
 }
 
 function fakeRecorder(): MediaRecorderLike {
-  return {
+  const recorder: MediaRecorderLike = {
     state: 'recording',
     ondataavailable: null,
+    onstop: null,
     start: (): void => undefined,
-    stop: (): void => undefined,
+    stop: (): void => {
+      recorder.state = 'inactive';
+      recorder.onstop?.();
+    },
   };
+  return recorder;
 }
 
 function fakeClock(times: number[]): { now(): number } {
@@ -214,7 +219,7 @@ describe('startRecorder', () => {
     const { handle, scheduler } = start({ createMediaRecorder: () => recorder, clock: fakeClock([0, 0]) });
 
     const inFlightTick = scheduler.currentCallback();
-    handle.stop();
+    void handle.stop();
     inFlightTick?.();
 
     expect(stopSpy).toHaveBeenCalledOnce();
@@ -225,8 +230,8 @@ describe('startRecorder', () => {
     const stopSpy = vi.spyOn(recorder, 'stop');
     const { handle } = start({ createMediaRecorder: () => recorder, clock: fakeClock([0, 0]) });
 
-    handle.stop();
-    handle.stop();
+    void handle.stop();
+    void handle.stop();
 
     expect(stopSpy).toHaveBeenCalledOnce();
   });
@@ -237,7 +242,7 @@ describe('startRecorder', () => {
 
     handle.updateRegions([{ x: NaN, y: 0, width: 1, height: 1 }]);
     scheduler.step();
-    handle.stop();
+    void handle.stop();
 
     expect(timer.cleared).toEqual([1]);
   });

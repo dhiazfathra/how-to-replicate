@@ -31,6 +31,13 @@ export type FinalizeCaptureOptions = {
  * fatal pipeline error — persistence failure, doc-gen crash, an unreadable
  * buffer — lands the capture in `failed`, where it is not viewable.
  *
+ * Ring-buffer capacity evictions (buffer.evictedCount()) drop real timeline
+ * events just as surely as redaction does — a How-to-Replicate step citing an
+ * evicted event's ID loses context with no visible signal otherwise. Per
+ * invariant 4, both drop sources feed the same withheldEventCount/fidelity
+ * computation; the capture must never report fidelity: 'full' when either
+ * source dropped events.
+ *
  * Requires `capture.state === 'composing'`: that's the only state from which
  * both `ready` and `failed` are legal per the machine's transition table, so
  * the catch block's `transition(capture, 'failed', ...)` is always itself
@@ -49,7 +56,7 @@ export async function finalizeCapture(options: FinalizeCaptureOptions): Promise<
 
   try {
     const events = buffer.events();
-    const withheldEventCount = buffer.withheldEventCount();
+    const withheldEventCount = buffer.withheldEventCount() + buffer.evictedCount();
     await repo.appendEvents(capture.id, events);
     const doc = docGenerator(events, { assets: capture.assets });
 

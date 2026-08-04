@@ -46,7 +46,8 @@ export type DegradeSink = ChunkSink &
 export type RecorderHandle = {
   /** Replace the current blur regions (fed by Task 11's per-frame `BlurRegionsMessage`). */
   updateRegions(regions: readonly RectLike[]): void;
-  stop(): void;
+  /** Resolves once the recorder has flushed its final pending chunk. */
+  stop(): Promise<void>;
   isDegraded(): boolean;
 };
 
@@ -90,7 +91,7 @@ export function startRecorder(
   function stopForDegrade(detail: string): void {
     stopped = true;
     degraded = true;
-    stopTimesliceRecording(recorder);
+    void stopTimesliceRecording(recorder);
     sink.markDegraded();
     sink.appendLifecycleEvent('video->screenshot-only', detail);
     screenshotFallback = startPeriodicScreenshots(screenshot, timer, sink);
@@ -123,12 +124,12 @@ export function startRecorder(
     updateRegions(next: readonly RectLike[]): void {
       regions = next;
     },
-    stop(): void {
+    stop(): Promise<void> {
       screenshotFallback?.stop();
       screenshotFallback = null;
-      if (stopped) return;
+      if (stopped) return Promise.resolve();
       stopped = true;
-      stopTimesliceRecording(recorder);
+      return stopTimesliceRecording(recorder);
     },
     isDegraded(): boolean {
       return degraded || budget.isDegraded();

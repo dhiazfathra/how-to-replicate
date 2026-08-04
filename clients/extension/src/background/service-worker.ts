@@ -24,6 +24,8 @@ import { CAPTURE_START_MESSAGE_TYPE, CAPTURE_STOP_MESSAGE_TYPE } from '../conten
 const OFFSCREEN_URL = 'offscreen.html';
 const OFFSCREEN_REASONS = ['DISPLAY_MEDIA'];
 const OFFSCREEN_JUSTIFICATION = 'Records and blurs capture video off the visible tab.';
+/** How long stop() waits for the offscreen document to ack its final chunk flush before giving up and degrading. */
+const OFFSCREEN_STOP_ACK_TIMEOUT_MS = 2000;
 
 type OnDetachListener = (source: DebuggerTarget, reason: string) => void;
 type OnMessageListener = (message: unknown, sender: unknown, sendResponse: (r?: unknown) => void) => boolean | void;
@@ -53,6 +55,23 @@ export type ServiceWorker = {
   stop(active: ActiveCapture): Promise<Capture>;
   ensureOffscreenDocument(captureId: string): Promise<void>;
 };
+
+/**
+ * Ask the offscreen document to stop and flush its final chunk, and wait for
+ * its ack (or `OFFSCREEN_STOP_ACK_TIMEOUT_MS`, whichever comes first).
+ * Returns `false` on timeout or if no offscreen document is listening — the
+ * caller treats that as an unconfirmed drop, not a silent one.
+ */
+function stopOffscreenRecording(chromeApi: ChromeAdapter, captureId: string): Promise<boolean> {
+  const acked = chromeApi.runtime
+    .sendMessage({ type: CAPTURE_STOP_MESSAGE_TYPE, captureId })
+    .then(() => true)
+    .catch(() => false);
+  const timedOut = new Promise<boolean>((resolve) => {
+    setTimeout(() => resolve(false), OFFSCREEN_STOP_ACK_TIMEOUT_MS);
+  });
+  return Promise.race([acked, timedOut]);
+}
 
 function newCapture(clock: Clock): Capture {
   return {
@@ -199,14 +218,20 @@ export function createServiceWorker(chromeApi: ChromeAdapter): ServiceWorker {
       active.fallback?.stop();
       await active.cdp.detach().catch(() => undefined);
       chromeApi.debugger.onDetach.removeListener(active.onDetachListener);
-      chromeApi.runtime.onMessage.removeListener(active.onOffscreenMessageListener);
-      chromeApi.runtime.onMessage.removeListener(active.onScreenshotRequestListener);
       await chromeApi.tabs
         .sendMessage(active.target.tabId, {
           type: CAPTURE_STOP_MESSAGE_TYPE,
           captureId: active.capture.id,
         })
         .catch(() => undefined);
+
+      // Keep `onOffscreenMessageListener` registered until the offscreen
+      // document has actually acked its stop — its final chunk can only
+      // arrive over that listener, so removing it earlier drops that chunk
+      // silently (Important-2 fix).
+      const offscreenStopped = await stopOffscreenRecording(chromeApi, active.capture.id);
+      chromeApi.runtime.onMessage.removeListener(active.onOffscreenMessageListener);
+      chromeApi.runtime.onMessage.removeListener(active.onScreenshotRequestListener);
 
       const { capture: redacting, event: redactingEvent } = transition(
         active.capture,
@@ -215,8 +240,15 @@ export function createServiceWorker(chromeApi: ChromeAdapter): ServiceWorker {
         active.clock.now(),
       );
       active.buffer.ingest(redactingEvent);
+      let precomposing = redacting;
+      if (!offscreenStopped) {
+        precomposing = { ...redacting, fidelity: 'degraded' };
+        active.buffer.ingest(
+          buildDegradedHandoffEvent(active.capture.id, active.clock, 'offscreen-stop-ack-timeout'),
+        );
+      }
       const { capture: composing, event: composingEvent } = transition(
-        redacting,
+        precomposing,
         'composing',
         null,
         active.clock.now(),

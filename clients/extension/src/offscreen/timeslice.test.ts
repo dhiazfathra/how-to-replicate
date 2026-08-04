@@ -7,9 +7,10 @@ function fakeRecorder(state: MediaRecorderLike['state'] = 'inactive'): MediaReco
 } {
   const startArgs: (number | undefined)[] = [];
   let stopCalls = 0;
-  return {
+  const recorder: MediaRecorderLike & { startArgs: (number | undefined)[]; stopCalls: number } = {
     state,
     ondataavailable: null,
+    onstop: null,
     startArgs,
     get stopCalls() {
       return stopCalls;
@@ -19,8 +20,11 @@ function fakeRecorder(state: MediaRecorderLike['state'] = 'inactive'): MediaReco
     },
     stop(): void {
       stopCalls += 1;
+      recorder.state = 'inactive';
+      recorder.onstop?.();
     },
   };
+  return recorder;
 }
 
 describe('startTimesliceRecording', () => {
@@ -44,15 +48,15 @@ describe('startTimesliceRecording', () => {
 });
 
 describe('stopTimesliceRecording', () => {
-  it('stops a recording recorder', () => {
+  it('stops a recording recorder and resolves once onstop fires', async () => {
     const recorder = fakeRecorder('recording');
-    stopTimesliceRecording(recorder);
+    await stopTimesliceRecording(recorder);
     expect(recorder.stopCalls).toBe(1);
   });
 
-  it('is a no-op on an already-inactive recorder', () => {
+  it('is a no-op on an already-inactive recorder', async () => {
     const recorder = fakeRecorder('inactive');
-    stopTimesliceRecording(recorder);
+    await stopTimesliceRecording(recorder);
     expect(recorder.stopCalls).toBe(0);
   });
 });

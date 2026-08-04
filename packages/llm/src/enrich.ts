@@ -9,7 +9,7 @@ import type {
   ReplicationDoc,
   Step,
 } from '@htr/capture-core';
-import type { LlmProvider } from './provider.js';
+import { providerBrand, type LlmProvider } from './provider.js';
 
 export type EnrichDocInput = {
   doc: ReplicationDoc;
@@ -22,6 +22,19 @@ type StepCandidate = {
   text: string;
   eventIds: string[];
 };
+
+/**
+ * Defense-in-depth for the ADR-007 local-only policy: `selectProvider` is
+ * meant to be the only place a non-local provider can reach this function,
+ * but enforcing it again here means a future caller that skips
+ * `selectProvider` still can't leak capture events to a remote endpoint.
+ */
+function isLocalProvider(provider: LlmProvider): boolean {
+  return (
+    provider[providerBrand] === true &&
+    (provider.target === 'localhost' || provider.target === 'native-messaging')
+  );
+}
 
 function isStepCandidate(value: unknown): value is StepCandidate {
   if (typeof value !== 'object' || value === null) return false;
@@ -172,6 +185,8 @@ export async function enrichDoc({
   provider,
   timeoutMs = 10_000,
 }: EnrichDocInput): Promise<ReplicationDoc> {
+  if (!isLocalProvider(provider)) return doc;
+
   let raw: string;
   try {
     raw = await provider.complete({
