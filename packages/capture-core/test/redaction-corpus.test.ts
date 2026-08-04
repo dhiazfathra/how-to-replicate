@@ -76,6 +76,23 @@ describe('redaction corpus', () => {
     },
   );
 
+  it.each(FIXTURES.filter((f) => NO_RULE_EXPECTED_IDS.has(f.id)))(
+    '$id: PHI is dropped by content-type policy, not a redaction rule',
+    (fixture: CorpusFixture) => {
+      const outcome = redactor.redactEvent(pipelineEvent(fixture));
+      // Positive assertion, not just "no rule needed to fire": the body must
+      // actually be gone before the redactor runs. If truncateBody's
+      // content-type drop ever regressed to a no-op, this fails even though
+      // the pattern rules would otherwise coincidentally redact the phone
+      // number anyway and the leak-scan test above would stay green.
+      expect(outcome.fidelity).toBe('full');
+      if (outcome.fidelity !== 'full') throw new Error('unreachable');
+      const payload = outcome.event.payload as NetworkPayload;
+      expect(payload.bodyDropped).toBe(true);
+      expect(payload.requestBody).toBeNull();
+    },
+  );
+
   it.each(FIXTURES.filter((f) => f.keyCountCheck))(
     '$id: key rewriting is non-destructive (no silent key merge)',
     (fixture: CorpusFixture) => {
