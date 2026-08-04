@@ -78,6 +78,11 @@ export type ChromeAction = {
   setBadgeText: (details: { text: string; tabId?: number }) => Promise<void>;
 };
 
+/** `captureVisibleTab` is the periodic-screenshot floor for degraded captures (invariant 2). */
+export type ChromeTabs = {
+  captureVisibleTab: () => Promise<string>;
+};
+
 export type ChromeAdapter = {
   debugger: ChromeDebugger;
   webRequest: ChromeWebRequest;
@@ -85,4 +90,5 @@ export type ChromeAdapter = {
   offscreen: ChromeOffscreen;
   runtime: ChromeRuntime;
   action: ChromeAction;
+  tabs: ChromeTabs;
 };

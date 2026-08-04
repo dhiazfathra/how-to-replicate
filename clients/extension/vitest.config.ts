@@ -9,7 +9,7 @@ export default defineConfig({
       // globals (declared, not provided, outside a real extension host) —
       // every branch of actual behavior they call into lives in the sibling
       // modules they wire together, which are fully covered.
-      exclude: ['src/background/main.ts', 'src/content/main.ts'],
+      exclude: ['src/background/main.ts', 'src/content/main.ts', 'src/offscreen/main.ts'],
     },
   },
 });

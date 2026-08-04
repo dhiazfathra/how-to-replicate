@@ -61,6 +61,9 @@ function fakeAdapter(managed: Record<string, unknown> = {}): ChromeAdapter & {
     action: {
       setBadgeText: vi.fn().mockResolvedValue(undefined),
     },
+    tabs: {
+      captureVisibleTab: vi.fn().mockResolvedValue('data:image/png;base64,'),
+    },
     fireDebuggerEvent(source, message) {
       for (const l of eventListeners) l(source, message);
     },
