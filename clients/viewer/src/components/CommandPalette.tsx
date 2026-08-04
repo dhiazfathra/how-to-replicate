@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import type { Capture } from '@htr/capture-core';
+import { isViewable, type Capture } from '@htr/capture-core';
 
 export type PaletteAction = { id: string; label: string; run: () => void };
 
@@ -34,7 +34,9 @@ export function CommandPalette({
     const q = query.trim().toLowerCase();
     const projectIds = [...new Set(captures.map((c) => c.projectId).filter((id): id is string => id !== null))];
 
-    const captureResults: PaletteResult[] = captures
+    const viewableCaptures = captures.filter(isViewable);
+
+    const captureResults: PaletteResult[] = viewableCaptures
       .filter((c) => q === '' || c.id.toLowerCase().includes(q) || (c.doc?.title ?? '').toLowerCase().includes(q))
       .map((c) => ({ type: 'capture', id: c.id, label: c.doc?.title ?? c.id }));
 

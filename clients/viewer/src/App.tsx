@@ -86,7 +86,7 @@ function CaptureList({
               onOpen(capture.id);
             }}
           >
-            {capture.doc?.title ?? capture.id}
+            {isViewable(capture) ? capture.doc?.title ?? capture.id : capture.id}
             {!isViewable(capture) && <span className="capture-list__state"> ({capture.state})</span>}
           </button>
         </li>

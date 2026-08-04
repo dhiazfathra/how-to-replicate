@@ -74,11 +74,28 @@ describe('App', () => {
     const store = makeStore([capture]);
     render(<App store={store} repo={makeRepo()} />);
 
-    await user.click(screen.getByRole('button', { name: /SECRET TITLE/ }));
+    await user.click(screen.getByRole('button', { name: /cap-1/ }));
 
     expect(screen.getByText(/not ready/)).toBeInTheDocument();
     expect(screen.queryByText('Click login')).not.toBeInTheDocument();
-    expect(screen.queryByText('SECRET TITLE', { selector: 'h1' })).not.toBeInTheDocument();
+    expect(screen.queryByText('SECRET TITLE')).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('SECRET TITLE');
+  });
+
+  it('never leaks a doc title into the capture list for a non-ready capture (e.g. ready -> expired)', () => {
+    // Regression test: machine.ts allows ready -> expired, and transition()
+    // spreads ...capture, so an expired capture keeps its non-null `doc`.
+    // The capture list must not render doc-derived content for it.
+    const capture = makeCapture('cap-1', {
+      state: 'expired',
+      doc: { title: 'EXPIRED SECRET TITLE', summary: '', steps: [step], expected: null, actual: null, generator: 'deterministic', generatorModel: null },
+    });
+    const store = makeStore([capture]);
+    render(<App store={store} repo={makeRepo()} />);
+
+    expect(screen.queryByText('EXPIRED SECRET TITLE')).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('EXPIRED SECRET TITLE');
+    expect(screen.getByRole('button', { name: /cap-1/ })).toBeInTheDocument();
   });
 
   it('renders capture content for a ready capture', async () => {

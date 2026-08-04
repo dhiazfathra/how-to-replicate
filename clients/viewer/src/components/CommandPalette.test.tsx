@@ -160,6 +160,32 @@ describe('CommandPalette', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
+  it('excludes non-ready captures from results and never surfaces their doc title', async () => {
+    const user = userEvent.setup();
+    const captures = [
+      makeCapture({
+        id: 'cap-1',
+        state: 'expired',
+        doc: { title: 'SECRET TITLE', summary: '', steps: [], expected: null, actual: null, generator: 'deterministic', generatorModel: null },
+      }),
+    ];
+    render(
+      <CommandPalette
+        open
+        captures={captures}
+        actions={[]}
+        onNavigateCapture={() => {}}
+        onNavigateProject={() => {}}
+        onClose={() => {}}
+      />,
+    );
+    expect(screen.queryByText('SECRET TITLE')).not.toBeInTheDocument();
+    expect(screen.queryByText('cap-1')).not.toBeInTheDocument();
+
+    await user.type(screen.getByLabelText('Search'), 'secret');
+    expect(screen.queryByText('SECRET TITLE')).not.toBeInTheDocument();
+  });
+
   it('deduplicates project ids and skips null projectIds', () => {
     const captures = [
       makeCapture({ id: 'cap-1', projectId: 'proj-1' }),
