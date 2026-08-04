@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createInstantReplay, createRedactor, createRingBuffer, parseRuleset } from '@htr/capture-core';
-import { createOffscreenRelayListener } from './offscreen-relay.js';
+import { encodeChunk } from '../lib/chunk-codec.js';
+import { createOffscreenRelayListener, createScreenshotRequestListener } from './offscreen-relay.js';
 
 const CAPTURE_ID = 'cap-1';
 
@@ -14,14 +15,20 @@ function buffer(clock = fixedClock()) {
 }
 
 describe('createOffscreenRelayListener', () => {
-  it('routes htr:video-chunk into the buffer', () => {
+  it('routes htr:video-chunk into the buffer, decoding the base64 wire payload', async () => {
     const replay = buffer();
     const listener = createOffscreenRelayListener(CAPTURE_ID, replay, fixedClock(), vi.fn());
-    const data = new Uint8Array([1, 2, 3]);
+    const original = new Uint8Array([1, 2, 3]);
+    const encoded = await encodeChunk(original);
 
-    listener({ type: 'htr:video-chunk', captureId: CAPTURE_ID, data });
+    // The regression this guards: `chrome.runtime.sendMessage` JSON-serializes
+    // its payload, so a raw Uint8Array/Blob never survives the trip — the
+    // wire value must already be a plain JSON-safe string by the time it
+    // reaches this listener.
+    expect(typeof encoded).toBe('string');
+    listener({ type: 'htr:video-chunk', captureId: CAPTURE_ID, data: encoded });
 
-    expect(replay.videoChunks()).toEqual([{ data, t: 0 }]);
+    expect(replay.videoChunks()).toEqual([{ data: original, t: 0 }]);
   });
 
   it('routes htr:screenshot into the buffer', () => {
@@ -83,5 +90,39 @@ describe('createOffscreenRelayListener', () => {
 
     expect(markDegraded).not.toHaveBeenCalled();
     expect(replay.videoChunks()).toHaveLength(0);
+  });
+});
+
+describe('createScreenshotRequestListener', () => {
+  it('captures the visible tab and returns the result via sendResponse, keeping the channel open', async () => {
+    const captureVisibleTab = vi.fn().mockResolvedValue('data:image/png;base64,abc');
+    const listener = createScreenshotRequestListener(CAPTURE_ID, { captureVisibleTab });
+    const sendResponse = vi.fn();
+
+    const keepOpen = listener({ type: 'htr:capture-screenshot-request', captureId: CAPTURE_ID }, undefined, sendResponse);
+
+    expect(keepOpen).toBe(true);
+    await vi.waitFor(() => expect(sendResponse).toHaveBeenCalledWith('data:image/png;base64,abc'));
+  });
+
+  it('ignores a request for a different captureId', () => {
+    const captureVisibleTab = vi.fn().mockResolvedValue('x');
+    const listener = createScreenshotRequestListener(CAPTURE_ID, { captureVisibleTab });
+    const sendResponse = vi.fn();
+
+    const result = listener({ type: 'htr:capture-screenshot-request', captureId: 'cap-other' }, undefined, sendResponse);
+
+    expect(result).toBeUndefined();
+    expect(captureVisibleTab).not.toHaveBeenCalled();
+  });
+
+  it('ignores malformed messages', () => {
+    const captureVisibleTab = vi.fn().mockResolvedValue('x');
+    const listener = createScreenshotRequestListener(CAPTURE_ID, { captureVisibleTab });
+    const sendResponse = vi.fn();
+
+    expect(listener(null, undefined, sendResponse)).toBeUndefined();
+    expect(listener({ type: 'htr:degraded', captureId: CAPTURE_ID }, undefined, sendResponse)).toBeUndefined();
+    expect(captureVisibleTab).not.toHaveBeenCalled();
   });
 });

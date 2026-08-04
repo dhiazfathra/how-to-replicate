@@ -1,4 +1,5 @@
 import type { ChromeAdapter } from '../lib/chrome-adapter.js';
+import { encodeChunk } from '../lib/chunk-codec.js';
 import { startRecorder, type CanvasTarget, type DegradeSink } from './recorder.js';
 import type { MediaRecorderLike } from './timeslice.js';
 import { createBlurRegionsListener, createFrameSource } from './wire.js';
@@ -30,11 +31,28 @@ declare const chrome: ChromeAdapter;
 const captureId = new URLSearchParams(location.search).get('captureId') ?? '';
 
 const sink: DegradeSink = {
-  pushVideoChunk: (data) => void chrome.runtime.sendMessage({ type: 'htr:video-chunk', captureId, data }),
+  // `chrome.runtime.sendMessage` JSON-serializes its payload — a raw
+  // Uint8Array/Blob would arrive on the service-worker side as `{}`. Encode
+  // to base64 here; `offscreen-relay.ts` decodes it back before it ever
+  // reaches `pushVideoChunk`.
+  pushVideoChunk: (data) =>
+    void encodeChunk(data).then((encoded) =>
+      chrome.runtime.sendMessage({ type: 'htr:video-chunk', captureId, data: encoded }),
+    ),
   pushScreenshot: (dataUrl) => void chrome.runtime.sendMessage({ type: 'htr:screenshot', captureId, dataUrl }),
   appendLifecycleEvent: (transition, detail) =>
     void chrome.runtime.sendMessage({ type: 'htr:lifecycle', captureId, transition, detail }),
   markDegraded: () => void chrome.runtime.sendMessage({ type: 'htr:degraded', captureId }),
+};
+
+// Offscreen documents cannot use the tabs API (MV3 only allows
+// `chrome.runtime` plus a small allowlist here) — relay the screenshot
+// capture to the service worker instead, which does have tabs access.
+const screenshot = {
+  captureVisibleTab: (): Promise<string> =>
+    chrome.runtime
+      .sendMessage({ type: 'htr:capture-screenshot-request', captureId })
+      .then((response) => response as string),
 };
 
 async function main(): Promise<void> {
@@ -58,7 +76,7 @@ async function main(): Promise<void> {
     { requestFrame: requestAnimationFrame },
     { now: () => performance.now() },
     sink,
-    { captureVisibleTab: () => chrome.tabs.captureVisibleTab() },
+    screenshot,
     { setInterval, clearInterval },
   );
 

@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { encodeChunk } from '../lib/chunk-codec.js';
 import { createServiceWorker, wireServiceWorker } from './service-worker.js';
 import { MANAGED_RULESET_KEY } from './ruleset-store.js';
 import type {
@@ -15,7 +16,7 @@ const allowedRuleset = {
 function fakeAdapter(managed: Record<string, unknown> = {}): ChromeAdapter & {
   fireDebuggerEvent(source: DebuggerTarget, message: DebuggerEvent): void;
   fireDetach(source: DebuggerTarget, reason: string): void;
-  fireMessage(message: unknown): void;
+  fireMessage(message: unknown, sendResponse?: (r?: unknown) => void): void;
 } {
   const eventListeners: ((source: DebuggerTarget, message: DebuggerEvent) => void)[] = [];
   const detachListeners: ((source: DebuggerTarget, reason: string) => void)[] = [];
@@ -75,8 +76,8 @@ function fakeAdapter(managed: Record<string, unknown> = {}): ChromeAdapter & {
     fireDetach(source, reason) {
       for (const l of detachListeners) l(source, reason);
     },
-    fireMessage(message) {
-      for (const l of messageListeners) l(message, undefined, () => undefined);
+    fireMessage(message, sendResponse = () => undefined) {
+      for (const l of messageListeners) l(message, undefined, sendResponse);
     },
   };
 }
@@ -199,8 +200,9 @@ describe('createServiceWorker', () => {
     const active = await worker.start('https://allowed.test', target);
     const captureId = active!.capture.id;
     const data = new Uint8Array([1]);
+    const encoded = await encodeChunk(data);
 
-    chromeApi.fireMessage({ type: 'htr:video-chunk', captureId, data });
+    chromeApi.fireMessage({ type: 'htr:video-chunk', captureId, data: encoded });
     chromeApi.fireMessage({ type: 'htr:screenshot', captureId, dataUrl: 'data:image/png;base64,x' });
     chromeApi.fireMessage({ type: 'htr:lifecycle', captureId, transition: 'video->screenshot', detail: 'budget' });
     chromeApi.fireMessage({ type: 'htr:degraded', captureId });
@@ -225,6 +227,19 @@ describe('createServiceWorker', () => {
     chromeApi.fireMessage({ type: 'htr:degraded', captureId: 'some-other-capture' });
 
     expect(active!.capture.fidelity).toBe('full');
+  });
+
+  it('answers htr:capture-screenshot-request via chrome.tabs, since the offscreen document cannot call it itself', async () => {
+    const chromeApi = fakeAdapter({ [MANAGED_RULESET_KEY]: allowedRuleset });
+    const worker = createServiceWorker(chromeApi);
+    await worker.rulesetStore.load();
+    const active = await worker.start('https://allowed.test', target);
+    const sendResponse = vi.fn();
+
+    chromeApi.fireMessage({ type: 'htr:capture-screenshot-request', captureId: active!.capture.id }, sendResponse);
+    await vi.waitFor(() => expect(sendResponse).toHaveBeenCalledWith('data:image/png;base64,'));
+
+    expect(chromeApi.tabs.captureVisibleTab).toHaveBeenCalled();
   });
 
   it('ensureOffscreenDocument creates the document only when none exists', async () => {

@@ -13,7 +13,7 @@ import type { ChromeAdapter, DebuggerTarget } from '../lib/chrome-adapter.js';
 import { createRulesetStore, type RulesetStore } from './ruleset-store.js';
 import { attachCdp, type CdpSession } from './cdp.js';
 import { buildDegradedHandoffEvent, startFallback, type FallbackSession } from './fallback.js';
-import { createOffscreenRelayListener } from './offscreen-relay.js';
+import { createOffscreenRelayListener, createScreenshotRequestListener } from './offscreen-relay.js';
 
 const OFFSCREEN_URL = 'offscreen.html';
 const OFFSCREEN_REASONS = ['DISPLAY_MEDIA'];
@@ -117,6 +117,13 @@ export function createServiceWorker(chromeApi: ChromeAdapter): ServiceWorker {
         createOffscreenRelayListener(capture.id, buffer, clock, () => {
           active.capture = { ...active.capture, fidelity: 'degraded' };
         }),
+      );
+
+      // Offscreen documents can't call `chrome.tabs.*` directly (MV3) — the
+      // periodic-screenshot floor (invariant-2 fallback) relays its capture
+      // request here, where `chrome.tabs` is actually available.
+      chromeApi.runtime.onMessage.addListener(
+        createScreenshotRequestListener(capture.id, chromeApi.tabs),
       );
 
       return active;

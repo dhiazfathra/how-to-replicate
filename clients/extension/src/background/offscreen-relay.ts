@@ -1,7 +1,11 @@
 import { newId, type CaptureEvent, type Clock, type InstantReplay } from '@htr/capture-core';
+import { decodeChunk } from '../lib/chunk-codec.js';
+import type { ChromeTabs } from '../lib/chrome-adapter.js';
 
 export type OffscreenMessage =
-  | { type: 'htr:video-chunk'; captureId: string; data: Uint8Array | Blob }
+  // `data` crosses `chrome.runtime.sendMessage` as base64 — see `chunk-codec.ts`
+  // for why a raw `Uint8Array`/`Blob` can't survive that trip.
+  | { type: 'htr:video-chunk'; captureId: string; data: string }
   | { type: 'htr:screenshot'; captureId: string; dataUrl: string }
   | { type: 'htr:lifecycle'; captureId: string; transition: string; detail: string | null }
   | { type: 'htr:degraded'; captureId: string };
@@ -12,6 +16,9 @@ const MESSAGE_TYPES: ReadonlySet<OffscreenMessage['type']> = new Set([
   'htr:lifecycle',
   'htr:degraded',
 ]);
+
+/** The offscreen document's `chrome.tabs.captureVisibleTab()` request — see `createScreenshotRequestListener`. */
+export type ScreenshotRequestMessage = { type: 'htr:capture-screenshot-request'; captureId: string };
 
 /**
  * Build the `chrome.runtime.onMessage` handler that routes Task 12's
@@ -34,7 +41,7 @@ export function createOffscreenRelayListener(
 
     switch (message.type) {
       case 'htr:video-chunk':
-        buffer.pushVideoChunk(message.data);
+        buffer.pushVideoChunk(decodeChunk(message.data));
         return;
       case 'htr:screenshot':
         buffer.pushScreenshot(message.dataUrl);
@@ -69,4 +76,28 @@ function isOffscreenMessage(message: unknown): message is OffscreenMessage {
   if (typeof message !== 'object' || message === null) return false;
   const type = (message as { type?: unknown }).type;
   return typeof type === 'string' && MESSAGE_TYPES.has(type as OffscreenMessage['type']);
+}
+
+function isScreenshotRequestMessage(message: unknown): message is ScreenshotRequestMessage {
+  if (typeof message !== 'object' || message === null) return false;
+  return (message as { type?: unknown }).type === 'htr:capture-screenshot-request';
+}
+
+/**
+ * Offscreen documents cannot call `chrome.tabs.*` (MV3 restricts them to
+ * `chrome.runtime` plus a small allowlist) — only the service worker can.
+ * This is the other half of that seam: it answers the offscreen document's
+ * `htr:capture-screenshot-request` by calling `chrome.tabs.captureVisibleTab()`
+ * here and returning the result through `sendResponse`, keeping the message
+ * channel open (`return true`) until the async capture resolves.
+ */
+export function createScreenshotRequestListener(
+  captureId: string,
+  tabs: ChromeTabs,
+): (message: unknown, sender: unknown, sendResponse: (r?: unknown) => void) => boolean | void {
+  return (message, _sender, sendResponse): boolean | void => {
+    if (!isScreenshotRequestMessage(message) || message.captureId !== captureId) return;
+    void tabs.captureVisibleTab().then((dataUrl) => sendResponse(dataUrl));
+    return true;
+  };
 }

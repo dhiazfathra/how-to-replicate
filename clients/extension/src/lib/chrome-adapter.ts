@@ -70,7 +70,13 @@ export type ChromeOffscreen = {
 
 export type ChromeRuntime = {
   sendMessage: (message: unknown) => Promise<unknown>;
-  onMessage: ChromeEvent<(message: unknown, sender: unknown, sendResponse: (r?: unknown) => void) => void>;
+  /**
+   * A listener returns `true` to keep the message channel open for an
+   * asynchronous `sendResponse` call (used by the offscreen document's
+   * screenshot-capture request, which the service worker answers after
+   * awaiting `chrome.tabs.captureVisibleTab()`).
+   */
+  onMessage: ChromeEvent<(message: unknown, sender: unknown, sendResponse: (r?: unknown) => void) => boolean | void>;
   getURL: (path: string) => string;
 };
 
