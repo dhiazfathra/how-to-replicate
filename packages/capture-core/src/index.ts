@@ -24,3 +24,4 @@ export * from './pipeline/gate.js';
 export * from './pipeline/run.js';
 export * from './export/markdown.js';
 export * from './export/htr.js';
+export * from './media/blur.js';

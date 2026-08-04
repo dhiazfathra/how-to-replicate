@@ -36,7 +36,18 @@ importers:
         specifier: ^7.3.6
         version: 7.3.6(@types/node@22.20.1)
 
-  clients/recording-link: {}
+  clients/recording-link:
+    dependencies:
+      '@htr/capture-core':
+        specifier: workspace:*
+        version: link:../../packages/capture-core
+    devDependencies:
+      jsdom:
+        specifier: ^25.0.1
+        version: 25.0.1(supports-color@7.2.0)
+      vite:
+        specifier: ^7.3.6
+        version: 7.3.6(@types/node@22.20.1)
 
   clients/viewer:
     dependencies:

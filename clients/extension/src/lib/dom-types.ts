@@ -5,6 +5,10 @@
  * through a parameter — testable with plain object literals, no jsdom.
  */
 
+// Moved to `@htr/capture-core` in Task 14 (shared with clients/recording-link).
+import type { RectLike } from '@htr/capture-core';
+export type { RectLike } from '@htr/capture-core';
+
 export type ElementLike = {
   tagName: string;
   getAttribute(name: string): string | null;
@@ -14,5 +18,3 @@ export type ElementLike = {
   querySelector(selector: string): ElementLike | null;
   matches(selector: string): boolean;
 };
-
-export type RectLike = { x: number; y: number; width: number; height: number };
