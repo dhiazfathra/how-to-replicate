@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { act, render, screen, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createRecordStore } from '@htr/capture-core';
 import type { Capture, CaptureEvent, CaptureStore, Step } from '@htr/capture-core';
@@ -152,7 +152,10 @@ describe('App', () => {
     const dialog = screen.getByRole('dialog', { name: 'Command palette' });
 
     await user.click(within(dialog).getByText('Login bug'));
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    // The palette fades out over 150ms before unmounting rather than vanishing instantly.
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
     expect(await screen.findByRole('heading', { name: 'Login bug' })).toBeInTheDocument();
   });
 
@@ -169,7 +172,9 @@ describe('App', () => {
     const dialog = screen.getByRole('dialog', { name: 'Command palette' });
     await user.click(within(dialog).getByText('proj-1'));
 
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
     expect(screen.queryByRole('heading', { name: 'Login bug' })).not.toBeInTheDocument();
   });
 
@@ -180,7 +185,9 @@ describe('App', () => {
     await user.keyboard('{Meta>}k{/Meta}');
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     await user.keyboard('{Meta>}k{/Meta}');
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
   });
 
   it('opens the command palette on ctrl+k too', async () => {
@@ -214,7 +221,9 @@ describe('App', () => {
     const dialog = screen.getByRole('dialog', { name: 'Command palette' });
     await user.click(within(dialog).getByText('Go to capture list'));
 
-    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
     expect(screen.queryByRole('heading', { name: 'Login bug' })).not.toBeInTheDocument();
   });
 

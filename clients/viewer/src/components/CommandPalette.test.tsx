@@ -1,8 +1,25 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { useState } from 'react';
+import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Capture } from '@htr/capture-core';
 import { CommandPalette } from './CommandPalette.js';
+
+function Wrapper({ initialOpen }: { initialOpen: boolean }) {
+  const [open, setOpen] = useState(initialOpen);
+  return (
+    <CommandPalette
+      open={open}
+      captures={[]}
+      actions={[]}
+      onNavigateCapture={() => {}}
+      onNavigateProject={() => {}}
+      onClose={() => {
+        setOpen(false);
+      }}
+    />
+  );
+}
 
 function makeCapture(overrides: Partial<Capture>): Capture {
   return {
@@ -203,5 +220,137 @@ describe('CommandPalette', () => {
       />,
     );
     expect(screen.getAllByText('proj-1')).toHaveLength(1);
+  });
+
+  it('appears instantly (data-state=open, no closing) when opened', () => {
+    render(<Wrapper initialOpen={true} />);
+    expect(screen.getByRole('dialog').getAttribute('data-state')).toBe('open');
+  });
+
+  it('keeps the dialog mounted with data-state=closing during the 150ms fade, then unmounts', () => {
+    vi.useFakeTimers();
+    try {
+      const { rerender, container } = render(
+        <CommandPalette
+          open
+          captures={[]}
+          actions={[]}
+          onNavigateCapture={() => {}}
+          onNavigateProject={() => {}}
+          onClose={() => {}}
+        />,
+      );
+      expect(screen.getByRole('dialog').getAttribute('data-state')).toBe('open');
+
+      rerender(
+        <CommandPalette
+          open={false}
+          captures={[]}
+          actions={[]}
+          onNavigateCapture={() => {}}
+          onNavigateProject={() => {}}
+          onClose={() => {}}
+        />,
+      );
+      expect(screen.getByRole('dialog').getAttribute('data-state')).toBe('closing');
+
+      act(() => {
+        vi.advanceTimersByTime(149);
+      });
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+      act(() => {
+        vi.advanceTimersByTime(1);
+      });
+      expect(container).toBeEmptyDOMElement();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cancels the pending close timer if reopened before the fade finishes', () => {
+    vi.useFakeTimers();
+    try {
+      const { rerender } = render(
+        <CommandPalette
+          open
+          captures={[]}
+          actions={[]}
+          onNavigateCapture={() => {}}
+          onNavigateProject={() => {}}
+          onClose={() => {}}
+        />,
+      );
+
+      rerender(
+        <CommandPalette
+          open={false}
+          captures={[]}
+          actions={[]}
+          onNavigateCapture={() => {}}
+          onNavigateProject={() => {}}
+          onClose={() => {}}
+        />,
+      );
+      expect(screen.getByRole('dialog').getAttribute('data-state')).toBe('closing');
+
+      act(() => {
+        vi.advanceTimersByTime(50);
+      });
+      rerender(
+        <CommandPalette
+          open
+          captures={[]}
+          actions={[]}
+          onNavigateCapture={() => {}}
+          onNavigateProject={() => {}}
+          onClose={() => {}}
+        />,
+      );
+      expect(screen.getByRole('dialog').getAttribute('data-state')).toBe('open');
+
+      act(() => {
+        vi.advanceTimersByTime(150);
+      });
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('unmounts on unmount while closing without throwing (cleanup clears the timer)', () => {
+    vi.useFakeTimers();
+    try {
+      const { rerender, unmount } = render(
+        <CommandPalette
+          open
+          captures={[]}
+          actions={[]}
+          onNavigateCapture={() => {}}
+          onNavigateProject={() => {}}
+          onClose={() => {}}
+        />,
+      );
+      rerender(
+        <CommandPalette
+          open={false}
+          captures={[]}
+          actions={[]}
+          onNavigateCapture={() => {}}
+          onNavigateProject={() => {}}
+          onClose={() => {}}
+        />,
+      );
+      expect(() => {
+        unmount();
+      }).not.toThrow();
+      expect(() => {
+        act(() => {
+          vi.advanceTimersByTime(200);
+        });
+      }).not.toThrow();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

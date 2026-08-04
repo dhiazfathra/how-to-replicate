@@ -1,5 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { isViewable, type Capture } from '@htr/capture-core';
+
+const CLOSE_FADE_MS = 150;
 
 export type PaletteAction = { id: string; label: string; run: () => void };
 
@@ -29,6 +31,28 @@ export function CommandPalette({
   onClose: () => void;
 }) {
   const [query, setQuery] = useState('');
+  const [mounted, setMounted] = useState(open);
+  const [closing, setClosing] = useState(false);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  useEffect(() => {
+    if (open) {
+      clearTimeout(closeTimer.current);
+      setMounted(true);
+      setClosing(false);
+      return;
+    }
+    if (!mounted) return;
+    setClosing(true);
+    closeTimer.current = setTimeout(() => {
+      setMounted(false);
+      setClosing(false);
+    }, CLOSE_FADE_MS);
+    return () => {
+      clearTimeout(closeTimer.current);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
 
   const results = useMemo<PaletteResult[]>(() => {
     const q = query.trim().toLowerCase();
@@ -51,7 +75,7 @@ export function CommandPalette({
     return [...captureResults, ...projectResults, ...actionResults];
   }, [query, captures, actions]);
 
-  if (!open) return null;
+  if (!mounted) return null;
 
   function select(result: PaletteResult): void {
     if (result.type === 'capture') onNavigateCapture(result.id);
@@ -61,7 +85,12 @@ export function CommandPalette({
   }
 
   return (
-    <div className="command-palette" role="dialog" aria-label="Command palette">
+    <div
+      className="command-palette"
+      data-state={closing ? 'closing' : 'open'}
+      role="dialog"
+      aria-label="Command palette"
+    >
       <input
         autoFocus
         type="text"

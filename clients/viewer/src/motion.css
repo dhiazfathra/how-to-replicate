@@ -12,7 +12,12 @@
 .command-palette {
   opacity: 1;
   transform: translateY(0) scale(1);
-  transition: opacity var(--motion-regular) ease-out, transform var(--motion-regular) ease-out;
+}
+
+/* Appear instantly; fade out over 150ms on dismiss (asymmetric per convention). */
+.command-palette[data-state='closing'] {
+  opacity: 0;
+  transition: opacity 150ms ease-out;
 }
 
 .fidelity-badge {
