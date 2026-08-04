@@ -4,3 +4,7 @@ export * from './types/doc.js';
 export * from './types/asset.js';
 export * from './identity.js';
 export * from './time.js';
+export * from './redaction/ruleset.js';
+export * from './redaction/engine.js';
+export * from './redaction/patterns.js';
+export * from './redaction/truncate.js';
