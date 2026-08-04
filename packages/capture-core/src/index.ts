@@ -12,3 +12,7 @@ export * from './storage/schema.js';
 export * from './storage/db.js';
 export * from './storage/repository.js';
 export * from './storage/budget.js';
+export * from './store/observable.js';
+export * from './store/capture-store.js';
+export * from './buffer/ring.js';
+export * from './buffer/instant-replay.js';
