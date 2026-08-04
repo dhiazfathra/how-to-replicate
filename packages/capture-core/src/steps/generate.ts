@@ -30,13 +30,7 @@ const INTERACTION_TEXT: Record<
   click: (payload, name, count) =>
     `Clicked ${name} on ${payload.url}${count > 1 ? ` ${count} times` : ''}`,
   input: (payload, name) => `Typed into ${name} on ${payload.url}`,
-  // The `''` fallback below is exercised by generate.test.ts's null-value
-  // keydown fixture (asserts the exact `Pressed "" on ...` output), but the
-  // v8 coverage provider does not register it as taken from inside a
-  // template-literal interpolation on an object-literal arrow's implicit
-  // return — hence the ignore hint on the next line.
   keydown: (payload) => {
-    /* v8 ignore next */
     const key = payload.value ?? '';
     return `Pressed "${key}" on ${payload.url}`;
   },
