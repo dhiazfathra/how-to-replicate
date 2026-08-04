@@ -55,6 +55,7 @@ function wrapMediaRecorder(stream: MediaStream): MediaRecorderLike {
 
 let stopHandle: { stop(): void } | null = null;
 let displayStream: MediaStream | null = null;
+let lastDownloadUrl: string | null = null;
 
 async function start(): Promise<void> {
   startButton.disabled = true;
@@ -106,7 +107,9 @@ async function stop(chunks: RecorderChunk[]): Promise<void> {
     });
 
     const blob = new Blob([bundle as BlobPart], { type: 'application/zip' });
-    downloadLink.href = URL.createObjectURL(blob);
+    if (lastDownloadUrl) URL.revokeObjectURL(lastDownloadUrl);
+    lastDownloadUrl = URL.createObjectURL(blob);
+    downloadLink.href = lastDownloadUrl;
     downloadLink.hidden = false;
     statusEl.textContent = 'Ready — nothing has been transmitted. Click Download to save it.';
   } catch (error) {
