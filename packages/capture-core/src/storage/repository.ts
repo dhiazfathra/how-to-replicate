@@ -22,10 +22,14 @@ export class CaptureRepository {
   }
 
   async appendEvents(captureId: string, events: CaptureEvent[]): Promise<void> {
+    const mismatch = events.find((event) => event.captureId !== captureId);
+    if (mismatch) {
+      throw new Error(
+        `appendEvents: event "${mismatch.id}" has captureId "${mismatch.captureId}", expected "${captureId}"`,
+      );
+    }
     const tx = this.db.transaction('events', 'readwrite');
-    await Promise.all(
-      events.map((event) => tx.store.put({ ...event, captureId })),
-    );
+    await Promise.all(events.map((event) => tx.store.put(event)));
     await tx.done;
   }
 
@@ -39,6 +43,9 @@ export class CaptureRepository {
     blob: Blob | Uint8Array,
     chunkBytes = DEFAULT_CHUNK_BYTES,
   ): Promise<void> {
+    // ponytail: holds the full blob plus every chunk slice in memory at once;
+    // fine at Phase 0 asset sizes, revisit with a streaming writer if assets
+    // grow past what a tab's heap can hold.
     const bytes = blob instanceof Uint8Array ? blob : new Uint8Array(await blob.arrayBuffer());
     const chunkCount = bytes.byteLength === 0 ? 1 : Math.ceil(bytes.byteLength / chunkBytes);
 
@@ -79,25 +86,35 @@ export class CaptureRepository {
   }
 
   async deleteCapture(id: string): Promise<void> {
-    const assets = await this.db.getAllFromIndex('assets', 'by-capture', id);
-    const events = await this.readEvents(id);
-
+    // Single readwrite transaction spanning lookup and delete: the cascade
+    // set is computed from a snapshot IndexedDB guarantees can't change
+    // underneath this transaction, so a concurrent appendEvents/putAssetChunked
+    // for the same capture either lands before this transaction starts (and
+    // is included in the cascade) or blocks until this transaction commits
+    // (and then writes to an already-deleted capture) — never orphaned rows.
     const tx = this.db.transaction(
       ['captures', 'events', 'assets', 'asset_chunks'],
       'readwrite',
     );
-    const ops: Promise<unknown>[] = [tx.objectStore('captures').delete(id)];
-    for (const event of events) {
-      ops.push(tx.objectStore('events').delete(event.id));
-    }
-    for (const asset of assets) {
-      ops.push(tx.objectStore('assets').delete(asset.id));
-      ops.push(
+    const eventsStore = tx.objectStore('events');
+    const assetsStore = tx.objectStore('assets');
+    const range = IDBKeyRange.bound([id, -Infinity], [id, Infinity]);
+
+    const [eventKeys, assets] = await Promise.all([
+      eventsStore.index('by-capture').getAllKeys(range),
+      assetsStore.index('by-capture').getAllKeys(id),
+    ]);
+
+    const ops: Promise<unknown>[] = [
+      tx.objectStore('captures').delete(id),
+      ...eventKeys.map((key) => eventsStore.delete(key)),
+      ...assets.map((assetId) => assetsStore.delete(assetId)),
+      ...assets.map((assetId) =>
         tx
           .objectStore('asset_chunks')
-          .delete(IDBKeyRange.bound([asset.id, 0], [asset.id, Infinity])),
-      );
-    }
+          .delete(IDBKeyRange.bound([assetId, 0], [assetId, Infinity])),
+      ),
+    ];
     await Promise.all(ops);
     await tx.done;
   }

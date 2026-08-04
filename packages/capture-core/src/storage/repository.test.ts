@@ -165,4 +165,28 @@ describe('CaptureRepository', () => {
     await repo.deleteCapture('cap-1');
     await expect(repo.getCapture('cap-1')).resolves.toBeUndefined();
   });
+
+  it('rejects appendEvents when an event captureId does not match the argument', async () => {
+    await repo.putCapture(makeCapture('cap-1'));
+    await expect(
+      repo.appendEvents('cap-1', [makeEvent('evt-1', 'wrong-capture', 1)]),
+    ).rejects.toThrow(/captureId/);
+  });
+
+  it('a write racing the delete transaction is included in the cascade, never orphaned', async () => {
+    await repo.putCapture(makeCapture('cap-1'));
+
+    // Both calls open overlapping readwrite transactions on 'events' in the
+    // same tick, before either awaits. IndexedDB serializes transactions
+    // with overlapping scope in creation order, so the append (created
+    // first, on the line above) commits before deleteCapture's atomic
+    // lookup-then-delete runs — so the raced-in event is swept up by the
+    // cascade instead of surviving as an orphan.
+    const appendPromise = repo.appendEvents('cap-1', [makeEvent('evt-race', 'cap-1', 1)]);
+    const deletePromise = repo.deleteCapture('cap-1');
+    await Promise.all([appendPromise, deletePromise]);
+
+    await expect(repo.getCapture('cap-1')).resolves.toBeUndefined();
+    await expect(repo.readEvents('cap-1')).resolves.toEqual([]);
+  });
 });
