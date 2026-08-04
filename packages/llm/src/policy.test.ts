@@ -1,13 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import { selectProvider } from './policy.js';
-import type { LlmProvider, ProviderTarget } from './provider.js';
+import { providerBrand, type LlmProvider, type ProviderTarget } from './provider.js';
 
 function provider(
   name: string,
   target: ProviderTarget,
   complete: LlmProvider['complete'],
 ): LlmProvider {
-  return { name, target, complete };
+  return { name, target, complete, [providerBrand]: true };
+}
+
+/** A provider that never went through a real factory — no brand key. */
+function unbrandedProvider(name: string, target: ProviderTarget): LlmProvider {
+  return {
+    name,
+    target,
+    complete: () => Promise.resolve('should-not-run'),
+  } as unknown as LlmProvider;
 }
 
 const ok = (text: string): LlmProvider['complete'] => () => Promise.resolve(text);
@@ -76,6 +85,22 @@ describe('selectProvider', () => {
     const result = await selectProvider({ localOnly: false }, [unknown], req);
 
     expect(result).toEqual({ provider: unknown, text: 'reply' });
+  });
+
+  it('treats a provider missing the factory brand as remote, excluding it under localOnly even though it claims target: localhost', async () => {
+    const spoofed = unbrandedProvider('spoofed', 'localhost');
+
+    const result = await selectProvider({ localOnly: true }, [spoofed], req);
+
+    expect(result).toBeNull();
+  });
+
+  it('still allows an unbranded provider through when not localOnly (target claim is irrelevant either way)', async () => {
+    const spoofed = unbrandedProvider('spoofed', 'localhost');
+
+    const result = await selectProvider({ localOnly: false }, [spoofed], req);
+
+    expect(result).toEqual({ provider: spoofed, text: 'should-not-run' });
   });
 
   it('returns null for an empty provider list', async () => {

@@ -12,8 +12,20 @@ export type CompletionRequest = {
   timeoutMs: number;
 };
 
+/**
+ * Marks an `LlmProvider` as actually built by one of this package's
+ * factories. Without this, `target` would be trustable-by-convention only —
+ * any plain object literal could claim `target: 'localhost'` while its
+ * `complete` posts to a remote gateway, and `selectProvider` would believe
+ * it. Only `http-provider.ts` and `native-messaging-provider.ts` set this
+ * key; `selectProvider` treats any provider missing it as `'remote'`
+ * regardless of what `target` claims.
+ */
+export const providerBrand: unique symbol = Symbol('htr-llm-provider-brand');
+
 export type LlmProvider = {
   name: string;
   target: ProviderTarget;
   complete(req: CompletionRequest): Promise<string>;
+  readonly [providerBrand]: true;
 };

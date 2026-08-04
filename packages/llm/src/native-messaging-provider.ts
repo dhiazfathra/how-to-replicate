@@ -1,4 +1,4 @@
-import type { LlmProvider } from './provider.js';
+import { providerBrand, type LlmProvider } from './provider.js';
 
 /**
  * Minimal shape of a `chrome.runtime.Port`, as used by native messaging. Kept
@@ -26,6 +26,7 @@ export function createNativeMessagingProvider(config: NativeMessagingConfig): Ll
   return {
     name: `native-messaging:${config.hostName}`,
     target: 'native-messaging',
+    [providerBrand]: true,
     complete({ prompt, timeoutMs }) {
       return new Promise((resolve, reject) => {
         const port = config.connect(config.hostName);

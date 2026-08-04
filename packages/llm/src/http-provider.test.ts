@@ -17,6 +17,9 @@ describe('createHttpProvider target derivation', () => {
     ['http://127.0.0.1:1234', 'localhost'],
     ['http://127.255.0.1', 'localhost'],
     ['http://[::1]:8080', 'localhost'],
+    ['http://0.0.0.0:11434', 'localhost'],
+    ['http://localhost.:8080', 'localhost'],
+    ['http://[::ffff:127.0.0.1]:8080', 'localhost'],
     ['not a url', 'remote'],
   ] as const)('%s -> %s', (baseUrl, target) => {
     const provider = createHttpProvider({ baseUrl, model: 'x' });

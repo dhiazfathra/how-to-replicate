@@ -1,7 +1,7 @@
 import type { CaptureEvent, ReplicationDoc } from '@htr/capture-core';
 import { describe, expect, it } from 'vitest';
 import { enrichDoc } from './enrich.js';
-import type { LlmProvider } from './provider.js';
+import { providerBrand, type LlmProvider } from './provider.js';
 
 function event(id: string, overrides: Partial<CaptureEvent> = {}): CaptureEvent {
   return {
@@ -28,11 +28,21 @@ function baseDoc(): ReplicationDoc {
 }
 
 function providerReturning(text: string): LlmProvider {
-  return { name: 'test-model', target: 'localhost', complete: () => Promise.resolve(text) };
+  return {
+    name: 'test-model',
+    target: 'localhost',
+    [providerBrand]: true,
+    complete: () => Promise.resolve(text),
+  };
 }
 
 function providerRejecting(error: Error): LlmProvider {
-  return { name: 'test-model', target: 'localhost', complete: () => Promise.reject(error) };
+  return {
+    name: 'test-model',
+    target: 'localhost',
+    [providerBrand]: true,
+    complete: () => Promise.reject(error),
+  };
 }
 
 describe('enrichDoc', () => {
@@ -245,5 +255,196 @@ describe('enrichDoc', () => {
 
     expect(result.generator).toBe('llm');
     expect(result.steps).toHaveLength(5);
+  });
+
+  it('drops a step naming the wrong console level (anchored-but-false)', async () => {
+    const events = [
+      event('console-1', {
+        kind: 'console',
+        payload: { level: 'log', text: 'foo', stack: null },
+      }),
+    ];
+    const response = JSON.stringify([{ text: 'An error appeared: foo', eventIds: ['console-1'] }]);
+
+    const result = await enrichDoc({ doc: baseDoc(), events, provider: providerReturning(response) });
+
+    expect(result.generator).toBe('deterministic');
+  });
+
+  it('drops a step naming the wrong HTTP method (anchored-but-false)', async () => {
+    const events = [
+      event('network-1', {
+        kind: 'network',
+        payload: {
+          method: 'GET',
+          url: '/api/patients/123',
+          status: 200,
+          requestHeaders: {},
+          responseHeaders: {},
+          requestBody: null,
+          responseBody: null,
+          bodyTruncated: false,
+          bodyDropped: false,
+          durationMs: 1,
+          sizeBytes: 0,
+        },
+      }),
+    ];
+    const response = JSON.stringify([
+      { text: 'A POST to /api/patients/123 returned 500', eventIds: ['network-1'] },
+    ]);
+
+    const result = await enrichDoc({ doc: baseDoc(), events, provider: providerReturning(response) });
+
+    expect(result.generator).toBe('deterministic');
+  });
+
+  it('drops a step naming the wrong status code, ignoring digits that are part of the URL', async () => {
+    const events = [
+      event('network-1', {
+        kind: 'network',
+        payload: {
+          method: 'GET',
+          url: '/api/patients/123',
+          status: 200,
+          requestHeaders: {},
+          responseHeaders: {},
+          requestBody: null,
+          responseBody: null,
+          bodyTruncated: false,
+          bodyDropped: false,
+          durationMs: 1,
+          sizeBytes: 0,
+        },
+      }),
+    ];
+    // Mentions the correct method (GET) and the URL, but claims a wrong
+    // status (500) that isn't part of the URL's own digits.
+    const wrongStatus = JSON.stringify([
+      { text: 'A GET to /api/patients/123 returned 500', eventIds: ['network-1'] },
+    ]);
+    const rightStatusWithUrlDigits = JSON.stringify([
+      { text: 'A GET to /api/patients/123 returned 200', eventIds: ['network-1'] },
+    ]);
+
+    const dropped = await enrichDoc({ doc: baseDoc(), events, provider: providerReturning(wrongStatus) });
+    const kept = await enrichDoc({
+      doc: baseDoc(),
+      events,
+      provider: providerReturning(rightStatusWithUrlDigits),
+    });
+
+    expect(dropped.generator).toBe('deterministic');
+    expect(kept.generator).toBe('llm');
+  });
+
+  it('drops a step naming the wrong interaction verb (anchored-but-false)', async () => {
+    const events = [
+      event('interaction-1', {
+        kind: 'interaction',
+        payload: {
+          type: 'input',
+          targetName: 'Save',
+          targetSelector: '#save',
+          url: '/form',
+          value: null,
+        },
+      }),
+    ];
+    const response = JSON.stringify([{ text: 'Clicked Save', eventIds: ['interaction-1'] }]);
+
+    const result = await enrichDoc({ doc: baseDoc(), events, provider: providerReturning(response) });
+
+    expect(result.generator).toBe('deterministic');
+  });
+
+  it('drops a step naming the wrong navigation trigger (anchored-but-false)', async () => {
+    const events = [
+      event('nav-1', { payload: { from: null, to: '/dashboard', trigger: 'load' } }),
+    ];
+    const response = JSON.stringify([
+      { text: 'Navigated to /dashboard via pushstate', eventIds: ['nav-1'] },
+    ]);
+
+    const result = await enrichDoc({ doc: baseDoc(), events, provider: providerReturning(response) });
+
+    expect(result.generator).toBe('deterministic');
+  });
+
+  it('keeps a step that correctly names the discriminating field alongside the salient content', async () => {
+    const events = [
+      event('interaction-1', {
+        kind: 'interaction',
+        payload: {
+          type: 'click',
+          targetName: 'Save',
+          targetSelector: '#save',
+          url: '/form',
+          value: null,
+        },
+      }),
+    ];
+    const response = JSON.stringify([{ text: 'Clicked Save', eventIds: ['interaction-1'] }]);
+
+    const result = await enrichDoc({ doc: baseDoc(), events, provider: providerReturning(response) });
+
+    expect(result.generator).toBe('llm');
+  });
+
+  it('skips the status check entirely for a network event with a null status (in-flight request)', async () => {
+    const events = [
+      event('network-1', {
+        kind: 'network',
+        payload: {
+          method: 'GET',
+          url: '/api/patients/123',
+          status: null,
+          requestHeaders: {},
+          responseHeaders: {},
+          requestBody: null,
+          responseBody: null,
+          bodyTruncated: false,
+          bodyDropped: false,
+          durationMs: null,
+          sizeBytes: null,
+        },
+      }),
+    ];
+    const response = JSON.stringify([
+      { text: 'A GET to /api/patients/123 is pending', eventIds: ['network-1'] },
+    ]);
+
+    const result = await enrichDoc({ doc: baseDoc(), events, provider: providerReturning(response) });
+
+    expect(result.generator).toBe('llm');
+  });
+
+  it('handles a network event with an empty url without crashing the status check', async () => {
+    const events = [
+      event('network-1', {
+        kind: 'network',
+        payload: {
+          method: 'GET',
+          url: '',
+          status: 200,
+          requestHeaders: {},
+          responseHeaders: {},
+          requestBody: null,
+          responseBody: null,
+          bodyTruncated: false,
+          bodyDropped: false,
+          durationMs: 1,
+          sizeBytes: 0,
+        },
+      }),
+    ];
+    // p.url is empty, so includesText(lower, p.url) is false regardless —
+    // this step is dropped for lacking any evidence of the URL, exercising
+    // the empty-url branch of the status check along the way.
+    const response = JSON.stringify([{ text: 'GET returned 200', eventIds: ['network-1'] }]);
+
+    const result = await enrichDoc({ doc: baseDoc(), events, provider: providerReturning(response) });
+
+    expect(result.generator).toBe('deterministic');
   });
 });

@@ -41,6 +41,56 @@ function includesText(haystack: string, needle: string): boolean {
   return trimmed !== '' && haystack.includes(trimmed);
 }
 
+const INTERACTION_VERBS: Record<InteractionPayload['type'], string> = {
+  click: 'clicked',
+  input: 'typed',
+  keydown: 'pressed',
+  scroll: 'scrolled',
+  submit: 'submitted',
+  mousemove: 'moved',
+};
+const CONSOLE_LEVELS: ConsolePayload['level'][] = ['log', 'info', 'warn', 'error', 'debug'];
+const NETWORK_METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'];
+const NAVIGATION_TRIGGERS: NavigationPayload['trigger'][] = [
+  'load',
+  'pushstate',
+  'popstate',
+  'replacestate',
+  'hashchange',
+];
+
+/**
+ * A step can quote a real, cited event's payload verbatim while still
+ * asserting something false about it — "Clicked Save" anchored to an
+ * `input` event whose target happens to be named "Save", for instance. For
+ * kinds with an enum-like discriminator, this is a cheap, deterministic
+ * fabrication check: if the step names a sibling value of that enum (the
+ * wrong interaction verb, console level, or HTTP method/trigger) and never
+ * names the event's actual value, it's describing the wrong thing and must
+ * not survive on the strength of an unrelated substring match.
+ */
+function namesWrongOption(lowerText: string, options: readonly string[], correct: string): boolean {
+  const correctLower = correct.toLowerCase();
+  const namesCorrect = lowerText.includes(correctLower);
+  const namesWrongSibling = options.some(
+    (option) => option.toLowerCase() !== correctLower && lowerText.includes(option.toLowerCase()),
+  );
+  return namesWrongSibling && !namesCorrect;
+}
+
+/**
+ * A 3-digit number in the text that isn't the event's actual HTTP status.
+ * `url` is stripped first so a path segment like `/patients/123` isn't
+ * mistaken for a claimed status code. Only called once `includesText` has
+ * already confirmed `url` is a non-empty substring of `text`.
+ */
+function namesWrongStatus(text: string, url: string, status: number | null): boolean {
+  if (status === null) return false;
+  const withoutUrl = text.split(url.toLowerCase()).join(' ');
+  const mentioned = withoutUrl.match(/\b\d{3}\b/g) ?? [];
+  return mentioned.some((code) => Number(code) !== status);
+}
+
 /**
  * Validates that `text` actually describes `event`'s salient payload
  * fields — citing a real event ID is necessary but not sufficient, the step
@@ -51,19 +101,26 @@ function describesEvent(text: string, event: CaptureEvent): boolean {
   switch (event.kind) {
     case 'console': {
       const p = event.payload as ConsolePayload;
-      return includesText(lower, p.text);
+      return includesText(lower, p.text) && !namesWrongOption(lower, CONSOLE_LEVELS, p.level);
     }
     case 'network': {
       const p = event.payload as NetworkPayload;
-      return includesText(lower, p.url);
+      return (
+        includesText(lower, p.url) &&
+        !namesWrongOption(lower, NETWORK_METHODS, p.method) &&
+        !namesWrongStatus(lower, p.url, p.status)
+      );
     }
     case 'interaction': {
       const p = event.payload as InteractionPayload;
-      return includesText(lower, p.targetName) || includesText(lower, p.url);
+      return (
+        (includesText(lower, p.targetName) || includesText(lower, p.url)) &&
+        !namesWrongOption(lower, Object.values(INTERACTION_VERBS), INTERACTION_VERBS[p.type])
+      );
     }
     case 'navigation': {
       const p = event.payload as NavigationPayload;
-      return includesText(lower, p.to);
+      return includesText(lower, p.to) && !namesWrongOption(lower, NAVIGATION_TRIGGERS, p.trigger);
     }
     case 'lifecycle': {
       const p = event.payload as LifecyclePayload;
@@ -128,11 +185,12 @@ export async function enrichDoc({
 
   if (survivors.length === 0) return doc;
 
+  const lastN = Math.max(0, ...doc.steps.map((s) => s.n));
   const steps: Step[] = [
     ...doc.steps,
     ...survivors.map(
       (candidate, index): Step => ({
-        n: doc.steps.length + index + 1,
+        n: lastN + index + 1,
         text: candidate.text,
         eventIds: candidate.eventIds,
         tVideo: null,
@@ -148,11 +206,47 @@ export async function enrichDoc({
   };
 }
 
+/**
+ * Only the fields `describesEvent` actually validates against — not the raw
+ * event. `NetworkPayload` in particular carries request/response headers and
+ * bodies that no validation reads; sending them to a provider that may
+ * legitimately be remote is disclosure with no corresponding benefit.
+ */
+function summarizeEvent(event: CaptureEvent): Record<string, unknown> {
+  const base = { id: event.id, t: event.t, kind: event.kind };
+  switch (event.kind) {
+    case 'console': {
+      const p = event.payload as ConsolePayload;
+      return { ...base, level: p.level, text: p.text };
+    }
+    case 'network': {
+      const p = event.payload as NetworkPayload;
+      return { ...base, method: p.method, url: p.url, status: p.status };
+    }
+    case 'interaction': {
+      const p = event.payload as InteractionPayload;
+      return { ...base, type: p.type, targetName: p.targetName, url: p.url };
+    }
+    case 'navigation': {
+      const p = event.payload as NavigationPayload;
+      return { ...base, to: p.to, trigger: p.trigger };
+    }
+    case 'lifecycle': {
+      const p = event.payload as LifecyclePayload;
+      return { ...base, transition: p.transition };
+    }
+    case 'annotation': {
+      const p = event.payload as AnnotationPayload;
+      return { ...base, text: p.text };
+    }
+  }
+}
+
 function buildPrompt(doc: ReplicationDoc, events: CaptureEvent[]): string {
   return JSON.stringify({
     instructions:
       'Return a JSON array of additional repro steps as {text, eventIds}. Every eventIds entry must be one of the ids listed in "events". Do not restate the deterministic steps.',
     deterministicSteps: doc.steps,
-    events,
+    events: events.map(summarizeEvent),
   });
 }

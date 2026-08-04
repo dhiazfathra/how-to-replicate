@@ -1,4 +1,4 @@
-import type { CompletionRequest, LlmProvider, ProviderTarget } from './provider.js';
+import { providerBrand, type CompletionRequest, type LlmProvider, type ProviderTarget } from './provider.js';
 
 export type LlmPolicy = {
   localOnly: boolean;
@@ -10,11 +10,15 @@ export type SelectedCompletion = {
 };
 
 /**
- * A provider whose `target` cannot be read is treated as `'remote'` — fail
- * closed, most-restrictive, never assume a provider of unknown locality is
- * safe to call under `localOnly`.
+ * A provider whose `target` cannot be trusted is treated as `'remote'` —
+ * fail closed, most-restrictive. That covers both an unreadable `target`
+ * value and, more importantly, a provider missing the `providerBrand` key:
+ * without the brand check a plain object literal could claim
+ * `target: 'localhost'` without ever going through a real factory, which is
+ * exactly the bypass `target` exists to prevent.
  */
 function readTarget(provider: LlmProvider): ProviderTarget {
+  if (provider[providerBrand] !== true) return 'remote';
   const target = provider.target;
   return target === 'localhost' || target === 'native-messaging' ? target : 'remote';
 }
