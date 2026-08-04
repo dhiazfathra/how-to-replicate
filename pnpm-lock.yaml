@@ -27,7 +27,14 @@ importers:
         specifier: ^3.2.4
         version: 3.2.7(supports-color@7.2.0)
 
-  clients/extension: {}
+  clients/extension:
+    devDependencies:
+      '@htr/capture-core':
+        specifier: workspace:*
+        version: link:../../packages/capture-core
+      vite:
+        specifier: ^7.3.6
+        version: 7.3.6
 
   clients/recording-link: {}
 

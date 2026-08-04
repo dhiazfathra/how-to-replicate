@@ -1,0 +1,33 @@
+{
+  "manifest_version": 3,
+  "name": "How to Replicate",
+  "version": "0.0.1",
+  "minimum_chrome_version": "116",
+  "description": "Captures a repro on affected origins and produces a How to Replicate document.",
+  "background": {
+    "service_worker": "background/main.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://*/*", "http://*/*"],
+      "js": ["content/main.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "permissions": [
+    "debugger",
+    "webRequest",
+    "storage",
+    "offscreen",
+    "activeTab",
+    "scripting",
+    "tabs"
+  ],
+  "storage": {
+    "managed_schema": "managed_schema.json"
+  },
+  "action": {
+    "default_title": "How to Replicate"
+  }
+}
