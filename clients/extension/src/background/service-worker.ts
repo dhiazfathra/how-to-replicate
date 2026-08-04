@@ -1,23 +1,32 @@
 import {
+  CaptureRepository,
   createClock,
   createInstantReplay,
   createRedactor,
   createRingBuffer,
+  finalizeCapture,
   newId,
+  openCaptureDb,
+  transition,
   type Capture,
   type CaptureEvent,
   type Clock,
   type InstantReplay,
+  type VideoBlurRule,
 } from '@htr/capture-core';
 import type { ChromeAdapter, DebuggerTarget } from '../lib/chrome-adapter.js';
 import { createRulesetStore, type RulesetStore } from './ruleset-store.js';
 import { attachCdp, type CdpSession } from './cdp.js';
 import { buildDegradedHandoffEvent, startFallback, type FallbackSession } from './fallback.js';
 import { createOffscreenRelayListener, createScreenshotRequestListener } from './offscreen-relay.js';
+import { CAPTURE_START_MESSAGE_TYPE, CAPTURE_STOP_MESSAGE_TYPE } from '../content/session.js';
 
 const OFFSCREEN_URL = 'offscreen.html';
 const OFFSCREEN_REASONS = ['DISPLAY_MEDIA'];
 const OFFSCREEN_JUSTIFICATION = 'Records and blurs capture video off the visible tab.';
+
+type OnDetachListener = (source: DebuggerTarget, reason: string) => void;
+type OnMessageListener = (message: unknown, sender: unknown, sendResponse: (r?: unknown) => void) => boolean | void;
 
 export type ActiveCapture = {
   capture: Capture;
@@ -26,6 +35,10 @@ export type ActiveCapture = {
   target: DebuggerTarget;
   cdp: CdpSession;
   fallback: FallbackSession | null;
+  /** Kept so `stop()` can remove exactly the listeners `start()` added (Important-5 fix). */
+  onDetachListener: OnDetachListener;
+  onOffscreenMessageListener: OnMessageListener;
+  onScreenshotRequestListener: OnMessageListener;
 };
 
 export type ServiceWorker = {
@@ -38,7 +51,7 @@ export type ServiceWorker = {
    */
   start(origin: string, target: DebuggerTarget): Promise<ActiveCapture | null>;
   stop(active: ActiveCapture): Promise<Capture>;
-  ensureOffscreenDocument(): Promise<void>;
+  ensureOffscreenDocument(captureId: string): Promise<void>;
 };
 
 function newCapture(clock: Clock): Capture {
@@ -76,6 +89,26 @@ function newCapture(clock: Clock): Capture {
  */
 export function createServiceWorker(chromeApi: ChromeAdapter): ServiceWorker {
   const rulesetStore = createRulesetStore(chromeApi.storage);
+  // Opened lazily (only once `stop()` actually needs to persist a capture)
+  // and reused across captures — `openCaptureDb` is idempotent for a given
+  // name, and the viewer opens this exact same default-named database.
+  let repoPromise: Promise<CaptureRepository> | null = null;
+  function getRepo(): Promise<CaptureRepository> {
+    repoPromise ??= openCaptureDb().then((db) => new CaptureRepository(db));
+    return repoPromise;
+  }
+
+  async function ensureOffscreenDocument(captureId: string): Promise<void> {
+    const exists = await chromeApi.offscreen.hasDocument();
+    if (exists) return;
+    const url = new URL(chromeApi.runtime.getURL(OFFSCREEN_URL));
+    url.searchParams.set('captureId', captureId);
+    await chromeApi.offscreen.createDocument({
+      url: url.toString(),
+      reasons: OFFSCREEN_REASONS,
+      justification: OFFSCREEN_JUSTIFICATION,
+    });
+  }
 
   return {
     rulesetStore,
@@ -97,9 +130,7 @@ export function createServiceWorker(chromeApi: ChromeAdapter): ServiceWorker {
       const onEvent = (event: CaptureEvent): void => buffer.ingest(event);
       const cdp = await attachCdp(chromeApi.debugger, target, capture.id, clock, onEvent);
 
-      const active: ActiveCapture = { capture, buffer, clock, target, cdp, fallback: null };
-
-      chromeApi.debugger.onDetach.addListener((source, reason) => {
+      const onDetachListener: OnDetachListener = (source, reason) => {
         if (source.tabId !== target.tabId || active.fallback) return;
         active.capture = { ...active.capture, fidelity: 'degraded' };
         buffer.ingest(buildDegradedHandoffEvent(capture.id, clock, reason));
@@ -111,20 +142,55 @@ export function createServiceWorker(chromeApi: ChromeAdapter): ServiceWorker {
           clock,
           onEvent,
         );
-      });
+      };
+      chromeApi.debugger.onDetach.addListener(onDetachListener);
 
-      chromeApi.runtime.onMessage.addListener(
-        createOffscreenRelayListener(capture.id, buffer, clock, () => {
+      const onOffscreenMessageListener: OnMessageListener = createOffscreenRelayListener(
+        capture.id,
+        buffer,
+        clock,
+        () => {
           active.capture = { ...active.capture, fidelity: 'degraded' };
-        }),
+        },
       );
+      chromeApi.runtime.onMessage.addListener(onOffscreenMessageListener);
 
       // Offscreen documents can't call `chrome.tabs.*` directly (MV3) — the
       // periodic-screenshot floor (invariant-2 fallback) relays its capture
       // request here, where `chrome.tabs` is actually available.
-      chromeApi.runtime.onMessage.addListener(
-        createScreenshotRequestListener(capture.id, chromeApi.tabs),
+      const onScreenshotRequestListener: OnMessageListener = createScreenshotRequestListener(
+        capture.id,
+        chromeApi.tabs,
       );
+      chromeApi.runtime.onMessage.addListener(onScreenshotRequestListener);
+
+      const active: ActiveCapture = {
+        capture,
+        buffer,
+        clock,
+        target,
+        cdp,
+        fallback: null,
+        onDetachListener,
+        onOffscreenMessageListener,
+        onScreenshotRequestListener,
+      };
+
+      await ensureOffscreenDocument(capture.id);
+
+      // Push the shared captureId/epoch/blur selectors to the tab's content
+      // script — it cannot derive any of these on its own (Critical 3/4 fix).
+      const blurSelectors = ruleset.rules
+        .filter((rule): rule is VideoBlurRule => rule.class === 'video-blur')
+        .map((rule) => rule.selector);
+      await chromeApi.tabs
+        .sendMessage(target.tabId, {
+          type: CAPTURE_START_MESSAGE_TYPE,
+          captureId: capture.id,
+          epoch: clock.epoch,
+          blurSelectors,
+        })
+        .catch(() => undefined);
 
       return active;
     },
@@ -132,18 +198,43 @@ export function createServiceWorker(chromeApi: ChromeAdapter): ServiceWorker {
     async stop(active: ActiveCapture): Promise<Capture> {
       active.fallback?.stop();
       await active.cdp.detach().catch(() => undefined);
-      return active.capture;
+      chromeApi.debugger.onDetach.removeListener(active.onDetachListener);
+      chromeApi.runtime.onMessage.removeListener(active.onOffscreenMessageListener);
+      chromeApi.runtime.onMessage.removeListener(active.onScreenshotRequestListener);
+      await chromeApi.tabs
+        .sendMessage(active.target.tabId, {
+          type: CAPTURE_STOP_MESSAGE_TYPE,
+          captureId: active.capture.id,
+        })
+        .catch(() => undefined);
+
+      const { capture: redacting, event: redactingEvent } = transition(
+        active.capture,
+        'redacting',
+        null,
+        active.clock.now(),
+      );
+      active.buffer.ingest(redactingEvent);
+      const { capture: composing, event: composingEvent } = transition(
+        redacting,
+        'composing',
+        null,
+        active.clock.now(),
+      );
+      active.buffer.ingest(composingEvent);
+
+      const repo = await getRepo();
+      const finalized = await finalizeCapture({
+        capture: composing,
+        buffer: active.buffer,
+        repo,
+        clock: active.clock,
+      });
+      active.capture = finalized;
+      return finalized;
     },
 
-    async ensureOffscreenDocument(): Promise<void> {
-      const exists = await chromeApi.offscreen.hasDocument();
-      if (exists) return;
-      await chromeApi.offscreen.createDocument({
-        url: chromeApi.runtime.getURL(OFFSCREEN_URL),
-        reasons: OFFSCREEN_REASONS,
-        justification: OFFSCREEN_JUSTIFICATION,
-      });
-    },
+    ensureOffscreenDocument,
   };
 }
 

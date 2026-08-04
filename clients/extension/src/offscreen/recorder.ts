@@ -27,7 +27,8 @@ export type Scheduler = {
   requestFrame(callback: () => void): void;
 };
 
-export type Clock = {
+/** Elapsed-time source driving frame-budget measurement — not capture-core's epoch-anchored `Clock`. */
+export type Stopwatch = {
   now(): number;
 };
 
@@ -71,7 +72,7 @@ export function startRecorder(
   canvas: CanvasTarget,
   createMediaRecorder: MediaRecorderFactory,
   scheduler: Scheduler,
-  clock: Clock,
+  clock: Stopwatch,
   sink: DegradeSink,
   screenshot: ScreenshotCapture,
   timer: IntervalTimer,

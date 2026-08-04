@@ -41,6 +41,7 @@ function fakeAction(): ChromeAction & { calls: { text: string; tabId?: number }[
       calls.push(details);
       return Promise.resolve();
     },
+    onClicked: { addListener: () => undefined, removeListener: () => undefined },
   };
 }
 

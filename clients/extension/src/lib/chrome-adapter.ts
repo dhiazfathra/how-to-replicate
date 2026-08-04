@@ -80,13 +80,19 @@ export type ChromeRuntime = {
   getURL: (path: string) => string;
 };
 
+export type ChromeActionClickTab = { id?: number; url?: string };
+
 export type ChromeAction = {
   setBadgeText: (details: { text: string; tabId?: number }) => Promise<void>;
+  /** Toolbar-icon click — this extension's only start/stop trigger (no popup declared). */
+  onClicked: ChromeEvent<(tab: ChromeActionClickTab) => void>;
 };
 
 /** `captureVisibleTab` is the periodic-screenshot floor for degraded captures (invariant 2). */
 export type ChromeTabs = {
   captureVisibleTab: () => Promise<string>;
+  /** Push a message to a specific tab's content script (start/stop session control). */
+  sendMessage: (tabId: number, message: unknown) => Promise<unknown>;
 };
 
 export type ChromeAdapter = {

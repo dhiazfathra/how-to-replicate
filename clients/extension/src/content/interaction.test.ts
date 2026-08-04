@@ -114,6 +114,11 @@ describe('startInteractionTrail', () => {
         list.push(handler);
         listeners.set(type, list);
       },
+      removeEventListener(type, handler) {
+        const list = listeners.get(type) ?? [];
+        const index = list.indexOf(handler);
+        if (index >= 0) list.splice(index, 1);
+      },
       fire(type, target) {
         for (const handler of listeners.get(type) ?? []) handler({ target });
       },
@@ -157,5 +162,18 @@ describe('startInteractionTrail', () => {
     const el = { ...fakeElement(), value: 42 } as unknown as ElementLike;
     doc.fire('input', el);
     expect((emit.mock.calls[0]![0].payload as InteractionPayload).value).toBeNull();
+  });
+
+  it('returns a teardown that removes every listener it added', () => {
+    const doc = fakeDoc();
+    const emit = vi.fn<(event: CaptureEvent) => void>();
+    const stop = startInteractionTrail(doc, 'cap-1', fakeClock(), () => 'https://x.test', emit);
+
+    stop();
+    const el = fakeElement({ tagName: 'A' });
+    for (const type of ['click', 'input', 'keydown', 'scroll', 'submit']) {
+      doc.fire(type, el);
+    }
+    expect(emit).not.toHaveBeenCalled();
   });
 });

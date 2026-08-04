@@ -93,7 +93,7 @@ function isScreenshotRequestMessage(message: unknown): message is ScreenshotRequ
  */
 export function createScreenshotRequestListener(
   captureId: string,
-  tabs: ChromeTabs,
+  tabs: Pick<ChromeTabs, 'captureVisibleTab'>,
 ): (message: unknown, sender: unknown, sendResponse: (r?: unknown) => void) => boolean | void {
   return (message, _sender, sendResponse): boolean | void => {
     if (!isScreenshotRequestMessage(message) || message.captureId !== captureId) return;

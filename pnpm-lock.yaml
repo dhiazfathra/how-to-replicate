@@ -32,6 +32,9 @@ importers:
       '@htr/capture-core':
         specifier: workspace:*
         version: link:../../packages/capture-core
+      fake-indexeddb:
+        specifier: ^6.0.0
+        version: 6.2.5
       vite:
         specifier: ^7.3.6
         version: 7.3.6(@types/node@22.20.1)

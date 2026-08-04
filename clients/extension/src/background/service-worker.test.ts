@@ -1,7 +1,10 @@
+import 'fake-indexeddb/auto';
 import { describe, expect, it, vi } from 'vitest';
+import { openCaptureDb, CaptureRepository } from '@htr/capture-core';
 import { encodeChunk } from '../lib/chunk-codec.js';
 import { createServiceWorker, wireServiceWorker } from './service-worker.js';
 import { MANAGED_RULESET_KEY } from './ruleset-store.js';
+import { CAPTURE_START_MESSAGE_TYPE, CAPTURE_STOP_MESSAGE_TYPE } from '../content/session.js';
 import type {
   ChromeAdapter,
   DebuggerEvent,
@@ -10,13 +13,18 @@ import type {
 
 const allowedRuleset = {
   version: '1',
-  rules: [{ id: 'allow', class: 'origin-allow', origins: ['https://allowed.test'] }],
+  rules: [
+    { id: 'allow', class: 'origin-allow', origins: ['https://allowed.test'] },
+    { id: 'blur-ssn', class: 'video-blur', selector: '.ssn' },
+  ],
 };
 
 function fakeAdapter(managed: Record<string, unknown> = {}): ChromeAdapter & {
   fireDebuggerEvent(source: DebuggerTarget, message: DebuggerEvent): void;
   fireDetach(source: DebuggerTarget, reason: string): void;
   fireMessage(message: unknown, sendResponse?: (r?: unknown) => void): void;
+  detachListenerCount(): number;
+  messageListenerCount(): number;
 } {
   const eventListeners: ((source: DebuggerTarget, message: DebuggerEvent) => void)[] = [];
   const detachListeners: ((source: DebuggerTarget, reason: string) => void)[] = [];
@@ -37,7 +45,10 @@ function fakeAdapter(managed: Record<string, unknown> = {}): ChromeAdapter & {
       },
       onDetach: {
         addListener: (l) => detachListeners.push(l),
-        removeListener: () => undefined,
+        removeListener: (l) => {
+          const i = detachListeners.indexOf(l);
+          if (i >= 0) detachListeners.splice(i, 1);
+        },
       },
     },
     webRequest: {
@@ -60,15 +71,20 @@ function fakeAdapter(managed: Record<string, unknown> = {}): ChromeAdapter & {
       sendMessage: vi.fn().mockResolvedValue(undefined),
       onMessage: {
         addListener: (l) => messageListeners.push(l),
-        removeListener: () => undefined,
+        removeListener: (l) => {
+          const i = messageListeners.indexOf(l);
+          if (i >= 0) messageListeners.splice(i, 1);
+        },
       },
       getURL: (path) => `chrome-extension://ext/${path}`,
     },
     action: {
       setBadgeText: vi.fn().mockResolvedValue(undefined),
+      onClicked: { addListener: vi.fn(), removeListener: vi.fn() },
     },
     tabs: {
       captureVisibleTab: vi.fn().mockResolvedValue('data:image/png;base64,'),
+      sendMessage: vi.fn().mockResolvedValue(undefined),
     },
     fireDebuggerEvent(source, message) {
       for (const l of eventListeners) l(source, message);
@@ -79,6 +95,8 @@ function fakeAdapter(managed: Record<string, unknown> = {}): ChromeAdapter & {
     fireMessage(message, sendResponse = () => undefined) {
       for (const l of messageListeners) l(message, undefined, sendResponse);
     },
+    detachListenerCount: () => detachListeners.length,
+    messageListenerCount: () => messageListeners.length,
   };
 }
 
@@ -242,16 +260,81 @@ describe('createServiceWorker', () => {
     expect(chromeApi.tabs.captureVisibleTab).toHaveBeenCalled();
   });
 
-  it('ensureOffscreenDocument creates the document only when none exists', async () => {
+  it('ensureOffscreenDocument creates the document with the captureId in the URL, only when none exists', async () => {
     const chromeApi = fakeAdapter();
     const worker = createServiceWorker(chromeApi);
     const createSpy = vi.spyOn(chromeApi.offscreen, 'createDocument');
 
-    await worker.ensureOffscreenDocument();
+    await worker.ensureOffscreenDocument('cap-42');
     expect(createSpy).toHaveBeenCalledTimes(1);
+    expect(createSpy.mock.calls[0]![0].url).toBe('chrome-extension://ext/offscreen.html?captureId=cap-42');
 
-    await worker.ensureOffscreenDocument();
+    await worker.ensureOffscreenDocument('cap-42');
     expect(createSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('start() creates the offscreen document carrying the real captureId and pushes start session control to the content script', async () => {
+    const chromeApi = fakeAdapter({ [MANAGED_RULESET_KEY]: allowedRuleset });
+    const worker = createServiceWorker(chromeApi);
+    await worker.rulesetStore.load();
+    const createSpy = vi.spyOn(chromeApi.offscreen, 'createDocument');
+
+    const active = await worker.start('https://allowed.test', target);
+
+    expect(createSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ url: `chrome-extension://ext/offscreen.html?captureId=${active!.capture.id}` }),
+    );
+    expect(chromeApi.tabs.sendMessage).toHaveBeenCalledWith(target.tabId, {
+      type: CAPTURE_START_MESSAGE_TYPE,
+      captureId: active!.capture.id,
+      epoch: active!.capture.epoch,
+      blurSelectors: ['.ssn'],
+    });
+  });
+
+  it('stop() pushes stop session control, removes fallback/message/detach listeners, and finalizes + persists the capture', async () => {
+    const chromeApi = fakeAdapter({ [MANAGED_RULESET_KEY]: allowedRuleset });
+    const worker = createServiceWorker(chromeApi);
+    await worker.rulesetStore.load();
+    const active = await worker.start('https://allowed.test', target);
+    const captureId = active!.capture.id;
+
+    expect(chromeApi.detachListenerCount()).toBe(1);
+    const messageListenersAfterStart = chromeApi.messageListenerCount();
+    expect(messageListenersAfterStart).toBeGreaterThanOrEqual(2);
+
+    const result = await worker.stop(active!);
+
+    expect(chromeApi.tabs.sendMessage).toHaveBeenCalledWith(target.tabId, {
+      type: CAPTURE_STOP_MESSAGE_TYPE,
+      captureId,
+    });
+    expect(chromeApi.detachListenerCount()).toBe(0);
+    expect(chromeApi.messageListenerCount()).toBe(messageListenersAfterStart - 2);
+
+    expect(result.state).toBe('ready');
+
+    const db = await openCaptureDb();
+    const repo = new CaptureRepository(db);
+    const persisted = await repo.getCapture(captureId);
+    expect(persisted?.state).toBe('ready');
+    const events = await repo.readEvents(captureId);
+    expect(events.some((e) => e.kind === 'lifecycle' && (e.payload as { transition?: string }).transition === 'recording->redacting')).toBe(true);
+  });
+
+  it('a stopped capture no longer answers screenshot requests or debugger detach events', async () => {
+    const chromeApi = fakeAdapter({ [MANAGED_RULESET_KEY]: allowedRuleset });
+    const worker = createServiceWorker(chromeApi);
+    await worker.rulesetStore.load();
+    const active = await worker.start('https://allowed.test', target);
+    await worker.stop(active!);
+
+    const sendResponse = vi.fn();
+    chromeApi.fireMessage({ type: 'htr:capture-screenshot-request', captureId: active!.capture.id }, sendResponse);
+    expect(chromeApi.tabs.captureVisibleTab).not.toHaveBeenCalled();
+
+    chromeApi.fireDetach(target, 'target_closed');
+    expect(active!.fallback).toBeNull();
   });
 });
 

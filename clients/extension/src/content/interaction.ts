@@ -77,6 +77,7 @@ export type DomEventLike = { target: unknown };
 
 export type DocumentLike = {
   addEventListener(type: string, handler: (event: DomEventLike) => void): void;
+  removeEventListener(type: string, handler: (event: DomEventLike) => void): void;
 };
 
 const TRACKED_TYPES: InteractionPayload['type'][] = [
@@ -105,7 +106,9 @@ function readValue(target: unknown): string | null {
 /**
  * Wire the interaction trail: one capturing listener per tracked event type,
  * each turning the DOM event into a descriptor-bearing `CaptureEvent` and
- * handing it to `emit`. Returns a teardown function.
+ * handing it to `emit`. Returns a teardown function that removes every
+ * listener it added — callers gate this on an active capture (there is no
+ * captureId to attribute events to otherwise) and must tear it down on stop.
  */
 export function startInteractionTrail(
   doc: DocumentLike,
@@ -113,9 +116,10 @@ export function startInteractionTrail(
   clock: Clock,
   urlProvider: () => string,
   emit: (event: CaptureEvent) => void,
-): void {
+): () => void {
+  const teardowns: (() => void)[] = [];
   for (const type of TRACKED_TYPES) {
-    doc.addEventListener(type, (event) => {
+    const handler = (event: DomEventLike): void => {
       if (!isElementLike(event.target)) return;
       emit(
         buildInteractionEvent(
@@ -124,6 +128,11 @@ export function startInteractionTrail(
           clock,
         ),
       );
-    });
+    };
+    doc.addEventListener(type, handler);
+    teardowns.push(() => doc.removeEventListener(type, handler));
   }
+  return (): void => {
+    for (const teardown of teardowns) teardown();
+  };
 }
