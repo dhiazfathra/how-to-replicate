@@ -65,7 +65,10 @@ function fakeAdapter(managed: Record<string, unknown> = {}): ChromeAdapter & {
         offscreenExists = true;
         return Promise.resolve();
       },
-      closeDocument: () => Promise.resolve(),
+      closeDocument: () => {
+        offscreenExists = false;
+        return Promise.resolve();
+      },
     },
     runtime: {
       sendMessage: vi.fn().mockResolvedValue(undefined),
@@ -320,6 +323,24 @@ describe('createServiceWorker', () => {
     expect(persisted?.state).toBe('ready');
     const events = await repo.readEvents(captureId);
     expect(events.some((e) => e.kind === 'lifecycle' && (e.payload as { transition?: string }).transition === 'recording->redacting')).toBe(true);
+  });
+
+  it('stop() closes the offscreen document so a second capture gets a fresh one with the new captureId (not the stale reused one)', async () => {
+    const chromeApi = fakeAdapter({ [MANAGED_RULESET_KEY]: allowedRuleset });
+    const worker = createServiceWorker(chromeApi);
+    await worker.rulesetStore.load();
+    const createSpy = vi.spyOn(chromeApi.offscreen, 'createDocument');
+
+    const first = await worker.start('https://allowed.test', target);
+    await worker.stop(first!);
+
+    const second = await worker.start('https://allowed.test', target);
+
+    expect(second!.capture.id).not.toBe(first!.capture.id);
+    expect(createSpy).toHaveBeenCalledTimes(2);
+    expect(createSpy.mock.calls[1]![0].url).toBe(
+      `chrome-extension://ext/offscreen.html?captureId=${second!.capture.id}`,
+    );
   });
 
   it('a stopped capture no longer answers screenshot requests or debugger detach events', async () => {

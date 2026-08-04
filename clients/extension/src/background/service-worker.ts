@@ -231,6 +231,11 @@ export function createServiceWorker(chromeApi: ChromeAdapter): ServiceWorker {
         clock: active.clock,
       });
       active.capture = finalized;
+      // Close the offscreen document so the next `start()` recreates it with
+      // the new capture's id in its URL — otherwise a reused offscreen doc
+      // stays pinned to this capture's id and silently id-filters away the
+      // next capture's blur/video/htr:degraded messages (Important fix).
+      await chromeApi.offscreen.closeDocument().catch(() => undefined);
       return finalized;
     },
 
