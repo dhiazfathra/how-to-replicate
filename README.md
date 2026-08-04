@@ -9,8 +9,9 @@ The recording is the input. The document is the product.
 
 ## Status
 
-**Design stage.** This repository currently contains the spec and the architecture
-decisions. No implementation code yet — Phase 0 has not started.
+**Phase 0 implementation in progress.** Extension, viewer, recording-link clients and
+the capture-core/llm/trackers packages exist with tests; see [Planned
+layout](#planned-layout) for what's built.
 
 - [Design spec](docs/superpowers/specs/2026-08-04-how-to-replicate-design.md) — all four phases
 - [Architecture Decision Records](docs/decisions/README.md) — 14 ADRs, with rejected alternatives
@@ -96,7 +97,17 @@ docs/
 
 ## Commands
 
-Added with the Phase 0 implementation. There is nothing to build or run yet.
+Requires `pnpm`. From the repo root:
+
+```bash
+pnpm install
+pnpm lint          # eslint
+pnpm typecheck     # tsc -b
+pnpm test          # vitest
+pnpm test:coverage # vitest with coverage
+pnpm check:deps    # enforce capture-core/clients dependency boundary
+pnpm build         # build all packages
+```
 
 ## Contributing
 
