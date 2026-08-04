@@ -46,7 +46,11 @@ importers:
         specifier: ^6.0.0
         version: 6.2.5
 
-  packages/llm: {}
+  packages/llm:
+    devDependencies:
+      '@htr/capture-core':
+        specifier: workspace:*
+        version: link:../capture-core
 
   packages/trackers: {}
 
