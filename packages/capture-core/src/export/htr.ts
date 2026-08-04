@@ -19,6 +19,10 @@ type ZipEntry = {
 const LOCAL_FILE_HEADER_SIG = 0x04034b50;
 const CENTRAL_DIR_SIG = 0x02014b50;
 const END_OF_CENTRAL_DIR_SIG = 0x06054b50;
+/** General-purpose bit 11: filenames are UTF-8. All names here are ASCII
+ * ULIDs/fixed strings today, but setting it costs nothing and avoids a
+ * silent mojibake trap if a non-ASCII asset name is ever introduced. */
+const UTF8_NAME_FLAG = 0x0800;
 
 // Standard CRC-32 (IEEE 802.3) table, built once and reused — no runtime
 // dependency needed, and no reliance on a specific Node global being typed.
@@ -75,7 +79,7 @@ function writeZip(files: { name: string; bytes: Uint8Array }[]): Uint8Array {
     const header = new DataView(new ArrayBuffer(30));
     header.setUint32(0, LOCAL_FILE_HEADER_SIG, true);
     header.setUint16(4, 20, true); // version needed
-    header.setUint16(6, 0, true); // flags
+    header.setUint16(6, UTF8_NAME_FLAG, true); // flags: UTF-8 filename
     header.setUint16(8, 0, true); // method: stored
     header.setUint16(10, 0, true); // mod time
     header.setUint16(12, 0, true); // mod date
@@ -99,7 +103,7 @@ function writeZip(files: { name: string; bytes: Uint8Array }[]): Uint8Array {
     header.setUint32(0, CENTRAL_DIR_SIG, true);
     header.setUint16(4, 20, true); // version made by
     header.setUint16(6, 20, true); // version needed
-    header.setUint16(8, 0, true); // flags
+    header.setUint16(8, UTF8_NAME_FLAG, true); // flags: UTF-8 filename
     header.setUint16(10, 0, true); // method: stored
     header.setUint16(12, 0, true); // mod time
     header.setUint16(14, 0, true); // mod date

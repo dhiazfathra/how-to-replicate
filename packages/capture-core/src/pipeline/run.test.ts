@@ -9,13 +9,13 @@ import type { Capture } from '../types/capture.js';
 import type { CaptureEvent } from '../types/event.js';
 import type { InstantReplay } from '../buffer/instant-replay.js';
 
-function makeCapture(): Capture {
+function makeCapture(state: Capture['state'] = 'composing'): Capture {
   return {
     id: 'cap-1',
     workspaceId: null,
     projectId: null,
     source: 'extension',
-    state: 'composing',
+    state,
     fidelity: 'full',
     createdAt: '2026-08-04T00:00:00.000Z',
     epoch: 0,
@@ -166,5 +166,51 @@ describe('finalizeCapture', () => {
     const result = await finalizeCapture({ capture: makeCapture(), buffer, repo });
 
     expect(result.state).toBe('failed');
+  });
+
+  const nonComposing: Capture['state'][] = ['recording', 'redacting', 'ready', 'failed', 'expired'];
+  it.each(nonComposing)(
+    'throws immediately (never a rejected pipeline) when called with a %s capture',
+    async (state) => {
+      const repo = await makeRepo();
+      const buffer = fakeBuffer([makeEvent('ev-1')], 0);
+
+      // Asserts the upfront precondition, not a transition-table throw from
+      // inside the catch block: without it, a non-composing capture would
+      // hit `transition(composed, 'ready')` throwing, then the catch's own
+      // `transition(capture, 'failed')` throwing a second time for states
+      // (e.g. recording) where `failed` isn't reachable either.
+      await expect(finalizeCapture({ capture: makeCapture(state), buffer, repo })).rejects.toThrow(
+        /requires a composing capture/,
+      );
+    },
+  );
+
+  it('stamps the ready lifecycle event with the injected clock offset', async () => {
+    const repo = await makeRepo();
+    const buffer = fakeBuffer([makeEvent('ev-1')], 0);
+    const clock = { epoch: 0, now: () => 9001 };
+
+    await finalizeCapture({ capture: makeCapture(), buffer, repo, clock });
+
+    const [lifecycleEvent] = await repo.readEvents('cap-1').then((events) =>
+      events.filter((e) => e.kind === 'lifecycle'),
+    );
+    expect(lifecycleEvent?.t).toBe(9001);
+  });
+
+  it('stamps the failed lifecycle event with the injected clock offset', async () => {
+    const repo = await makeRepo();
+    const buffer = fakeBuffer([makeEvent('ev-1')], 0);
+    const clock = { epoch: 0, now: () => 4242 };
+    vi.spyOn(repo, 'appendEvents').mockRejectedValueOnce(new Error('disk full'));
+
+    await finalizeCapture({ capture: makeCapture(), buffer, repo, clock });
+
+    // appendEvents was mocked out for the first (events) call only, so the
+    // failure-path appendEvents([event]) call after it went through for real.
+    const stored = await repo.readEvents('cap-1');
+    const lifecycleEvent = stored.find((e) => e.kind === 'lifecycle');
+    expect(lifecycleEvent?.t).toBe(4242);
   });
 });

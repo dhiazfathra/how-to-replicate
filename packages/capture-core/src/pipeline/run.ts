@@ -4,7 +4,9 @@ import type { GenerateDocOptions } from '../steps/generate.js';
 import type { ReplicationDoc } from '../types/doc.js';
 import type { InstantReplay } from '../buffer/instant-replay.js';
 import type { CaptureRepository } from '../storage/repository.js';
+import type { Clock } from '../time.js';
 import { generateDoc } from '../steps/generate.js';
+import { createClock } from '../time.js';
 import { transition } from './machine.js';
 
 export type DocGenerator = (events: CaptureEvent[], opts?: GenerateDocOptions) => ReplicationDoc;
@@ -14,6 +16,8 @@ export type FinalizeCaptureOptions = {
   buffer: InstantReplay;
   repo: CaptureRepository;
   docGenerator?: DocGenerator;
+  /** Source of the `t` offset stamped on lifecycle events. Defaults to a fresh `createClock()`. */
+  clock?: Clock;
 };
 
 /**
@@ -26,10 +30,22 @@ export type FinalizeCaptureOptions = {
  * fail-closed outcome and does not stop the capture reaching `ready`. Only a
  * fatal pipeline error — persistence failure, doc-gen crash, an unreadable
  * buffer — lands the capture in `failed`, where it is not viewable.
+ *
+ * Requires `capture.state === 'composing'`: that's the only state from which
+ * both `ready` and `failed` are legal per the machine's transition table, so
+ * the catch block's `transition(capture, 'failed', ...)` is always itself
+ * legal. Called from any other state, this throws immediately instead of
+ * risking a second, harder-to-diagnose throw from inside error handling.
  */
 export async function finalizeCapture(options: FinalizeCaptureOptions): Promise<Capture> {
   const { capture, buffer, repo } = options;
+  if (capture.state !== 'composing') {
+    throw new Error(
+      `finalizeCapture requires a composing capture (got: ${capture.state})`,
+    );
+  }
   const docGenerator = options.docGenerator ?? generateDoc;
+  const clock = options.clock ?? createClock();
 
   try {
     const events = buffer.events();
@@ -44,12 +60,17 @@ export async function finalizeCapture(options: FinalizeCaptureOptions): Promise<
       fidelity: withheldEventCount > 0 ? 'degraded' : capture.fidelity,
     };
 
-    const { capture: ready, event } = transition(composed, 'ready');
+    const { capture: ready, event } = transition(composed, 'ready', null, clock.now());
     await repo.appendEvents(capture.id, [event]);
     await repo.putCapture(ready);
     return ready;
   } catch (error) {
-    const { capture: failed, event } = transition(capture, 'failed', errorMessage(error));
+    const { capture: failed, event } = transition(
+      capture,
+      'failed',
+      errorMessage(error),
+      clock.now(),
+    );
     await repo.putCapture(failed).catch(() => undefined);
     await repo.appendEvents(capture.id, [event]).catch(() => undefined);
     return failed;

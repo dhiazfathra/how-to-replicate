@@ -66,6 +66,24 @@ describe('renderMarkdown', () => {
     expect(md).toContain('4 events withheld by redaction policy.');
   });
 
+  it('escapes a pipe in an environment value so it cannot split the table', () => {
+    const md = renderMarkdown(
+      makeCapture({
+        env: {
+          userAgent: 'test-agent',
+          platform: 'test',
+          viewport: { w: 100, h: 100 },
+          devicePixelRatio: 1,
+          locale: 'en-US',
+          timezone: 'UTC',
+          url: 'https://example.com/search?q=a|b',
+        },
+      }),
+    );
+    expect(md).toContain('https://example.com/search?q=a\\|b');
+    expect(md).not.toContain('q=a|b |');
+  });
+
   it('falls back to placeholders for missing expected/actual', () => {
     const md = renderMarkdown(
       makeCapture({ doc: { ...doc, expected: null, actual: null } }),

@@ -62,29 +62,44 @@ describe('transition', () => {
     expect(event.payload).toMatchObject({ detail: 'doc-gen crashed' });
   });
 
-  const illegal: [CaptureState, CaptureState][] = [
-    ['recording', 'composing'],
-    ['recording', 'ready'],
-    ['recording', 'failed'],
-    ['recording', 'expired'],
-    ['recording', 'recording'],
-    ['redacting', 'recording'],
-    ['redacting', 'ready'],
-    ['redacting', 'expired'],
-    ['composing', 'recording'],
-    ['composing', 'redacting'],
-    ['composing', 'expired'],
-    ['ready', 'recording'],
-    ['ready', 'redacting'],
-    ['ready', 'composing'],
-    ['ready', 'failed'],
-    ['failed', 'ready'],
-    ['failed', 'recording'],
-    ['failed', 'expired'],
-    ['expired', 'ready'],
-    ['expired', 'recording'],
-    ['expired', 'failed'],
+  it('defaults the lifecycle event t to 0 when no clock offset is given', () => {
+    const { event } = transition(makeCapture('recording'), 'redacting');
+    expect(event.t).toBe(0);
+  });
+
+  it('stamps the lifecycle event with the given clock offset', () => {
+    const { event } = transition(makeCapture('recording'), 'redacting', null, 4200);
+    expect(event.t).toBe(4200);
+  });
+
+  const ALL_STATES: CaptureState[] = [
+    'recording',
+    'redacting',
+    'composing',
+    'ready',
+    'failed',
+    'expired',
   ];
+  const LEGAL = new Set([
+    'recording->redacting',
+    'redacting->composing',
+    'redacting->failed',
+    'composing->ready',
+    'composing->failed',
+    'ready->expired',
+  ]);
+
+  // Full 6x6 cross-product minus the 6 legal pairs above, so this table
+  // self-maintains if a state is ever added instead of needing hand-upkeep.
+  const illegal = ALL_STATES.flatMap((from) =>
+    ALL_STATES.filter((to) => !LEGAL.has(`${from}->${to}`)).map(
+      (to): [CaptureState, CaptureState] => [from, to],
+    ),
+  );
+
+  it('covers every non-legal state pair', () => {
+    expect(illegal.length).toBe(ALL_STATES.length * ALL_STATES.length - LEGAL.size);
+  });
 
   it.each(illegal)('throws on %s -> %s', (from, to) => {
     expect(() => transition(makeCapture(from), to)).toThrow(/illegal capture transition/);

@@ -1,6 +1,11 @@
 import type { Capture } from '../types/capture.js';
 import { assertReady } from '../pipeline/gate.js';
 
+/** A raw `|` inside a table cell would otherwise split it into extra columns. */
+function escapeTableCell(value: string): string {
+  return value.replace(/\|/g, '\\|');
+}
+
 /** Render a ready capture's `ReplicationDoc` to markdown. Throws on non-`ready`. */
 export function renderMarkdown(capture: Capture): string {
   assertReady(capture);
@@ -31,13 +36,13 @@ export function renderMarkdown(capture: Capture): string {
 
   lines.push('## Environment', '');
   lines.push('| Field | Value |', '| --- | --- |');
-  lines.push(`| URL | ${capture.env.url} |`);
-  lines.push(`| User agent | ${capture.env.userAgent} |`);
-  lines.push(`| Platform | ${capture.env.platform} |`);
+  lines.push(`| URL | ${escapeTableCell(capture.env.url)} |`);
+  lines.push(`| User agent | ${escapeTableCell(capture.env.userAgent)} |`);
+  lines.push(`| Platform | ${escapeTableCell(capture.env.platform)} |`);
   lines.push(`| Viewport | ${capture.env.viewport.w}x${capture.env.viewport.h} |`);
   lines.push(`| Device pixel ratio | ${capture.env.devicePixelRatio} |`);
-  lines.push(`| Locale | ${capture.env.locale} |`);
-  lines.push(`| Timezone | ${capture.env.timezone} |`);
+  lines.push(`| Locale | ${escapeTableCell(capture.env.locale)} |`);
+  lines.push(`| Timezone | ${escapeTableCell(capture.env.timezone)} |`);
   lines.push('');
 
   return lines.join('\n');
