@@ -99,10 +99,11 @@ describe('createInstantReplay', () => {
     });
     replay.ingest(consoleEvent('e1', 'no phi here'));
     expect(replay.withheldEventCount()).toBe(0);
+    expect(replay.evictedCount()).toBe(0);
     expect(replay.events()).toHaveLength(1);
   });
 
-  it('increments withheldEventCount for a dropped event and keeps it out of the buffer', () => {
+  it('increments withheldEventCount (redaction-only) for a dropped event, and leaves evictedCount at 0', () => {
     const replay = createInstantReplay({
       redactor: dropAllRedactor(),
       ring: createRingBuffer<CaptureEvent>(),
@@ -110,10 +111,11 @@ describe('createInstantReplay', () => {
     });
     replay.ingest(dropEvent());
     expect(replay.withheldEventCount()).toBe(1);
+    expect(replay.evictedCount()).toBe(0);
     expect(replay.events()).toHaveLength(0);
   });
 
-  it('counts ring evictions toward withheldEventCount', () => {
+  it('counts ring evictions in evictedCount only, leaving withheldEventCount (redaction-only) at 0', () => {
     const replay = createInstantReplay({
       redactor: emailRedactor(),
       ring: createRingBuffer<CaptureEvent>({ maxEvents: 1, maxBytes: 1024 * 1024 }),
@@ -121,7 +123,8 @@ describe('createInstantReplay', () => {
     });
     replay.ingest(consoleEvent('e1', 'a'));
     replay.ingest(consoleEvent('e2', 'b'));
-    expect(replay.withheldEventCount()).toBe(1);
+    expect(replay.evictedCount()).toBe(1);
+    expect(replay.withheldEventCount()).toBe(0);
     expect(replay.events()).toHaveLength(1);
   });
 

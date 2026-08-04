@@ -22,7 +22,10 @@ export type InstantReplayOptions = {
 export type InstantReplay = {
   /** Redacts on ingest, then pushes: the buffer never holds raw PHI. */
   ingest(rawEvent: CaptureEvent): void;
+  /** Redaction-caused drops only (invariant 4: lost fidelity must be visible). */
   withheldEventCount(): number;
+  /** Ring-buffer capacity evictions — normal rotation, not a fidelity concern. */
+  evictedCount(): number;
   events(): CaptureEvent[];
   pushVideoChunk(data: Uint8Array | Blob): void;
   videoChunks(): VideoChunk[];
@@ -40,6 +43,7 @@ export function createInstantReplay(options: InstantReplayOptions): InstantRepla
   const windowMs = options.windowMs ?? VIDEO_WINDOW_MS;
 
   let withheld = 0;
+  let evicted = 0;
   const videoChunks: VideoChunk[] = [];
 
   function releaseExpiredChunks(): void {
@@ -56,12 +60,16 @@ export function createInstantReplay(options: InstantReplayOptions): InstantRepla
         withheld += 1;
         return;
       }
-      const evicted = ring.push(outcome.event);
-      withheld += evicted.length;
+      const droppedByEviction = ring.push(outcome.event);
+      evicted += droppedByEviction.length;
     },
 
     withheldEventCount(): number {
       return withheld;
+    },
+
+    evictedCount(): number {
+      return evicted;
     },
 
     events(): CaptureEvent[] {
