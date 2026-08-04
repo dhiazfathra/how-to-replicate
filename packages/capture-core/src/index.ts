@@ -16,3 +16,6 @@ export * from './store/observable.js';
 export * from './store/capture-store.js';
 export * from './buffer/ring.js';
 export * from './buffer/instant-replay.js';
+export * from './steps/naming.js';
+export * from './steps/noise.js';
+export * from './steps/generate.js';

@@ -19,7 +19,7 @@ export type NetworkPayload = {
 };
 
 export type InteractionPayload = {
-  type: 'click' | 'input' | 'keydown' | 'scroll' | 'submit';
+  type: 'click' | 'input' | 'keydown' | 'scroll' | 'submit' | 'mousemove';
   targetName: string;
   targetSelector: string;
   url: string;
