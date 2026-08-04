@@ -3,7 +3,7 @@ import type {
   InteractionPayload,
   NetworkPayload,
 } from '../types/event.js';
-import type { RedactionRule, RedactionRuleset } from './ruleset.js';
+import { ENGINE_INTERNAL_ERROR_RULE_ID, type RedactionRule, type RedactionRuleset } from './ruleset.js';
 
 export type RedactionOutcome =
   | { fidelity: 'full' | 'redacted'; event: CaptureEvent }
@@ -18,7 +18,7 @@ export type Redactor = {
 type ApplyResult = { changed: boolean; payload: CaptureEvent['payload'] };
 
 /** Reserved ruleId for a drop caused by the engine itself, not a specific rule. */
-const ENGINE_INTERNAL_ERROR = 'engine:internal-error';
+const ENGINE_INTERNAL_ERROR = ENGINE_INTERNAL_ERROR_RULE_ID;
 
 /**
  * Build a Redactor from a parsed ruleset. `redactEvent` is pure and total: for
@@ -267,9 +267,12 @@ function applyPatternToString(value: string, regex: RegExp, label: string): { va
 
 /**
  * Recursively apply a pattern to every string reachable in a JSON-like value,
- * including object keys. Key rewrites are collision-safe: if two keys in the
- * same object redact to the same string, later ones (by iteration order) get
- * an ordinal suffix (`#2`, `#3`, ...) instead of overwriting a sibling.
+ * including object keys — for freeform JSON *content* only (a parsed request/
+ * response body), never for a payload's own schema field names. Key rewrites
+ * are collision-safe: if two keys in the same object redact to the same
+ * string, later ones (by iteration order) get an ordinal suffix (`#2`, `#3`,
+ * ...), searched until a free slot is found, instead of overwriting a
+ * sibling or another already-suffixed key.
  */
 function deepPatternWalk(value: unknown, regex: RegExp, label: string): { value: unknown; changed: boolean } {
   if (typeof value === 'string') {
@@ -298,10 +301,44 @@ function deepPatternWalk(value: unknown, regex: RegExp, label: string): { value:
 
       let finalKey = keyResult.value;
       if (Object.prototype.hasOwnProperty.call(next, finalKey)) {
-        finalKey = `${finalKey}#${index + 1}`;
+        let suffix = index + 1;
+        let candidate = `${finalKey}#${suffix}`;
+        while (Object.prototype.hasOwnProperty.call(next, candidate)) {
+          suffix += 1;
+          candidate = `${finalKey}#${suffix}`;
+        }
+        finalKey = candidate;
       }
       next[finalKey] = valueResult.value;
     });
+    return { value: next, changed };
+  }
+
+  return { value, changed: false };
+}
+
+/**
+ * Apply a pattern to every string *value* reachable in a JSON-like value,
+ * leaving object keys untouched. Used for a payload's own schema fields
+ * (targetSelector, url, header names, ...) — those key names are structural,
+ * not user content, and renaming one would make a later field-path/header/
+ * dom-selector rule silently miss the field it's supposed to match. No
+ * CaptureEvent payload field is ever an array, so unlike `deepPatternWalk`
+ * this doesn't need an array case.
+ */
+function patternMapValues(value: unknown, regex: RegExp, label: string): { value: unknown; changed: boolean } {
+  if (typeof value === 'string') {
+    return applyPatternToString(value, regex, label);
+  }
+
+  if (isPlainObject(value)) {
+    let changed = false;
+    const next: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(value)) {
+      const result = patternMapValues(val, regex, label);
+      if (result.changed) changed = true;
+      next[key] = result.value;
+    }
     return { value: next, changed };
   }
 
@@ -333,6 +370,7 @@ function applyPattern(
         isJson = false;
       }
       if (isJson) {
+        // Freeform JSON content — keys may be rewritten, collision-safely.
         const walked = deepPatternWalk(parsed, regex, label);
         if (walked.changed) {
           changed = true;
@@ -347,13 +385,13 @@ function applyPattern(
       }
     }
 
-    // Bodies are already handled above (JSON-aware); walk everything else
-    // (url, method, headers, status, ...) generically for the same pattern,
-    // leaving the already-processed bodies untouched.
+    // Everything else (url, method, headers, status, ...) is the payload's
+    // own schema, not freeform content: only values are scanned, never the
+    // field/header names themselves. Bodies are excluded — already handled.
     const rest: Record<string, unknown> = { ...next };
     delete rest.requestBody;
     delete rest.responseBody;
-    const walkedRest = deepPatternWalk(rest, regex, label);
+    const walkedRest = patternMapValues(rest, regex, label);
     if (walkedRest.changed) changed = true;
 
     return {
@@ -366,7 +404,9 @@ function applyPattern(
     };
   }
 
-  const walked = deepPatternWalk(payload, regex, label);
+  // Non-network payloads have no freeform JSON content, only fixed schema
+  // fields (text, targetSelector, targetName, ...) — values only, never keys.
+  const walked = patternMapValues(payload, regex, label);
   return { changed: walked.changed, payload: walked.value as CaptureEvent['payload'] };
 }
 

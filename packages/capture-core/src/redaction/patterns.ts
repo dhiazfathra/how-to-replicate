@@ -12,7 +12,10 @@ export const PHI_PATTERNS: PatternRule[] = [
   {
     id: 'builtin:phone-id',
     class: 'pattern',
-    pattern: '\\b(?:\\+62|62|0)8\\d{7,11}\\b',
+    // A leading "+" isn't a word character, so `\b` never holds right before
+    // it — use a not-preceded-by-digit lookbehind instead so the "+62" form
+    // actually matches (and matches whole, "+" included).
+    pattern: '(?<!\\d)(?:\\+?62|0)8\\d{7,11}\\b',
     label: 'phone-id',
   },
   { id: 'builtin:nik', class: 'pattern', pattern: '\\b\\d{16}\\b', label: 'nik' },

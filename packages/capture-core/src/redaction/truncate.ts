@@ -8,7 +8,7 @@ export const ALLOWED_BODY_CONTENT_TYPES = [
   'text/plain',
   'text/html',
   'application/x-www-form-urlencoded',
-];
+] as const;
 
 export type TruncateResult = {
   body: string | null;
@@ -28,7 +28,7 @@ export function truncateBody(body: string | null, contentType: string | null): T
   const parts = (contentType ?? '').split(';');
   // `split` on a string always yields at least one element.
   const normalized = (parts[0] as string).trim().toLowerCase();
-  if (!ALLOWED_BODY_CONTENT_TYPES.includes(normalized)) {
+  if (!(ALLOWED_BODY_CONTENT_TYPES as readonly string[]).includes(normalized)) {
     return { body: null, bodyTruncated: false, bodyDropped: true };
   }
 
@@ -38,6 +38,23 @@ export function truncateBody(body: string | null, contentType: string | null): T
     return { body, bodyTruncated: false, bodyDropped: false };
   }
 
-  const truncated = new TextDecoder('utf-8').decode(bytes.subarray(0, MAX_BODY_BYTES));
+  const cut = safeUtf8CutIndex(bytes, MAX_BODY_BYTES);
+  const truncated = new TextDecoder('utf-8').decode(bytes.subarray(0, cut));
   return { body: truncated, bodyTruncated: true, bodyDropped: false };
+}
+
+/**
+ * Largest index `<= maxBytes` at which `bytes` can be cut without splitting a
+ * multi-byte UTF-8 sequence. If the byte at `maxBytes` is a continuation byte
+ * (`10xxxxxx`), the sequence that produced it started before `maxBytes` and
+ * would still be incomplete there, so the whole sequence is dropped.
+ */
+function safeUtf8CutIndex(bytes: Uint8Array, maxBytes: number): number {
+  const boundaryByte = bytes[maxBytes];
+  if (boundaryByte === undefined || (boundaryByte & 0xc0) !== 0x80) {
+    return maxBytes; // not mid-sequence: either past the end, or a fresh char starts here
+  }
+  let start = maxBytes;
+  while (start > 0 && ((bytes[start] as number) & 0xc0) === 0x80) start--;
+  return start;
 }

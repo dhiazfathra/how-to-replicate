@@ -41,9 +41,8 @@ describe('PHI_PATTERNS', () => {
 
   it('redacts an Indonesian phone number', () => {
     expect(redactText('call 081234567890')).toBe('call [REDACTED:phone-id]');
-    // The leading "+" is a non-word character, so \b anchors just after it —
-    // the "+" itself is left outside the match.
-    expect(redactText('call +6281234567890')).toBe('call +[REDACTED:phone-id]');
+    expect(redactText('call +6281234567890')).toBe('call [REDACTED:phone-id]');
+    expect(redactText('call 6281234567890')).toBe('call [REDACTED:phone-id]');
   });
 
   it('redacts an email address', () => {

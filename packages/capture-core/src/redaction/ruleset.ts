@@ -32,6 +32,9 @@ export type RedactionRuleset = {
   rules: RedactionRule[];
 };
 
+/** Reserved for the engine's own internal-failure drops — never a valid rule id. */
+export const ENGINE_INTERNAL_ERROR_RULE_ID = 'engine:internal-error';
+
 /**
  * Parse and validate an unknown value into a RedactionRuleset. Throws on any
  * malformed input rather than silently dropping an unparseable rule — a
@@ -50,6 +53,18 @@ export function parseRuleset(input: unknown): RedactionRuleset {
     throw new Error('ruleset: "rules" must be an array');
   }
   const rules = obj.rules.map((rule, index) => parseRule(rule, index));
+
+  const seenIds = new Set<string>();
+  for (const rule of rules) {
+    if (rule.id === ENGINE_INTERNAL_ERROR_RULE_ID) {
+      throw new Error(`ruleset: rule id "${rule.id}" is reserved for engine-internal failures`);
+    }
+    if (seenIds.has(rule.id)) {
+      throw new Error(`ruleset: duplicate rule id "${rule.id}"`);
+    }
+    seenIds.add(rule.id);
+  }
+
   return { version: obj.version, rules };
 }
 

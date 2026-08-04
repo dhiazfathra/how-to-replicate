@@ -51,6 +51,27 @@ describe('parseRuleset', () => {
     expect(() => parseRuleset({ version: '1', rules: [{ id: 'a', class: 'nope' }] })).toThrow(/unknown rule class/);
   });
 
+  it('throws when a rule reuses the reserved engine:internal-error id', () => {
+    expect(() =>
+      parseRuleset({
+        version: '1',
+        rules: [{ id: 'engine:internal-error', class: 'header', name: 'x' }],
+      }),
+    ).toThrow(/reserved/);
+  });
+
+  it('throws on duplicate rule ids, since Set-dedup in rulesApplied would silently collapse them', () => {
+    expect(() =>
+      parseRuleset({
+        version: '1',
+        rules: [
+          { id: 'dup', class: 'header', name: 'x' },
+          { id: 'dup', class: 'header', name: 'y' },
+        ],
+      }),
+    ).toThrow(/duplicate rule id/);
+  });
+
   describe('field-path', () => {
     it('throws when pointer is missing', () => {
       expect(() =>

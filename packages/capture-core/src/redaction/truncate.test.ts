@@ -57,4 +57,30 @@ describe('truncateBody', () => {
     expect(result.body).toHaveLength(MAX_BODY_BYTES);
     expect(new TextEncoder().encode(result.body ?? '').length).toBe(MAX_BODY_BYTES);
   });
+
+  it('never splits a multi-byte character straddling the exact 32 KB cut', () => {
+    // '€' is 3 UTF-8 bytes (0xE2 0x82 0xAC). Padding to MAX_BODY_BYTES - 1
+    // ASCII bytes puts the '€' starting at the last included byte, so the
+    // cut lands inside it (after its 1st byte).
+    const body = 'a'.repeat(MAX_BODY_BYTES - 1) + '€';
+    const result = truncateBody(body, 'text/plain');
+    expect(result.bodyTruncated).toBe(true);
+    expect(result.body).not.toContain('�');
+    const bytes = new TextEncoder().encode(result.body ?? '');
+    expect(bytes.length).toBeLessThanOrEqual(MAX_BODY_BYTES);
+    // The dangling '€' must have been dropped whole, not partially decoded.
+    expect(result.body).toBe('a'.repeat(MAX_BODY_BYTES - 1));
+  });
+
+  it('keeps a body whose multi-byte character lands exactly on the boundary', () => {
+    // Pad so the '€' starts right where MAX_BODY_BYTES ends: the boundary
+    // byte is the start of a *new* character (or past the end), not a
+    // continuation byte, so nothing should be trimmed beyond the plain
+    // over-length case.
+    const body = 'a'.repeat(MAX_BODY_BYTES) + '€';
+    const result = truncateBody(body, 'text/plain');
+    expect(result.bodyTruncated).toBe(true);
+    expect(result.body).toBe('a'.repeat(MAX_BODY_BYTES));
+    expect(result.body).not.toContain('�');
+  });
 });

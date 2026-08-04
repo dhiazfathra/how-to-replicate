@@ -330,6 +330,84 @@ describe('createRedactor: pattern', () => {
     expect(body).toEqual({ codes: ['[REDACTED:digits]', 'ok'] });
   });
 
+  it('never rewrites a payload field name (schema keys are not JSON body content)', () => {
+    // Regression for the reviewer-found fail-open: a pattern rule matching
+    // "target" must not rename `targetSelector`/`targetName`, because that
+    // would make a later dom-selector rule silently miss the field and ship
+    // the value unredacted while still reporting fidelity: 'redacted'.
+    const redactor = createRedactor(
+      ruleset([
+        { id: 'p', class: 'pattern', pattern: 'target', label: 'kw' },
+        { id: 'd', class: 'dom-selector', selector: '#ssn' },
+      ]),
+    );
+    const event = interactionEvent({
+      targetName: 'SSN',
+      targetSelector: '#ssn',
+      value: '123-45-6789',
+    });
+    const outcome = redactor.redactEvent(event);
+    if (outcome.fidelity === 'dropped') throw new Error('unexpected drop');
+    const payload = outcome.event.payload as InteractionPayload;
+    // The dom-selector rule must still see the real field names and fire.
+    expect(payload).toEqual({
+      type: 'input',
+      targetName: '[REDACTED]',
+      targetSelector: '#ssn',
+      url: 'https://example.com',
+      value: '[REDACTED]',
+    });
+    expect(outcome.event.redaction.rulesApplied).toContain('d');
+  });
+
+  it('never rewrites a network payload field name (url, headers keys, etc.)', () => {
+    const redactor = createRedactor(
+      ruleset([
+        { id: 'p', class: 'pattern', pattern: 'url|type', label: 'kw' },
+        { id: 'h', class: 'header', name: 'content-type' },
+      ]),
+    );
+    const event = networkEvent({ requestHeaders: { 'content-type': 'application/json' } });
+    const outcome = redactor.redactEvent(event);
+    if (outcome.fidelity === 'dropped') throw new Error('unexpected drop');
+    const payload = outcome.event.payload as NetworkPayload;
+    // Header rule must still find "content-type" — the key was never renamed.
+    expect(payload.requestHeaders['content-type']).toBe('[REDACTED]');
+    expect(Object.keys(payload.requestHeaders)).toEqual(['content-type']);
+  });
+
+  it('does not rewrite header key names, only header values, via the pattern rule', () => {
+    const redactor = createRedactor(
+      ruleset([{ id: 'p', class: 'pattern', pattern: '\\d{4}', label: 'digits' }]),
+    );
+    const event = networkEvent({ requestHeaders: { 'x-1234': 'value has 5678 in it' } });
+    const outcome = redactor.redactEvent(event);
+    if (outcome.fidelity === 'dropped') throw new Error('unexpected drop');
+    const payload = outcome.event.payload as NetworkPayload;
+    expect(Object.keys(payload.requestHeaders)).toEqual(['x-1234']);
+    expect(payload.requestHeaders['x-1234']).toBe('value has [REDACTED:digits] in it');
+  });
+
+  it('resolves a second-round key collision instead of overwriting or merging', () => {
+    // "secret1" and "secret2" both redact to "[REDACTED:s]". "secret2" sits
+    // at index 2, so a single-attempt suffix computes "...#3" — which the
+    // literal middle key already claims. A naive one-shot suffix would
+    // collide again and silently overwrite that entry (one of three values
+    // lost). The fix must keep searching for a free slot.
+    const redactor = createRedactor(
+      ruleset([{ id: 'p', class: 'pattern', pattern: 'secret\\d?', label: 's' }]),
+    );
+    const event = networkEvent({
+      requestBody: JSON.stringify({ secret1: 1, '[REDACTED:s]#3': 2, secret2: 3 }),
+    });
+    const outcome = redactor.redactEvent(event);
+    if (outcome.fidelity === 'dropped') throw new Error('unexpected drop');
+    const body: unknown = JSON.parse((outcome.event.payload as NetworkPayload).requestBody ?? '');
+    // All three original values must survive under distinct keys.
+    expect(Object.values(body as Record<string, number>).sort()).toEqual([1, 2, 3]);
+    expect(Object.keys(body as Record<string, number>)).toHaveLength(3);
+  });
+
   it('scans a non-JSON body as plain text', () => {
     const redactor = createRedactor(
       ruleset([{ id: 'p', class: 'pattern', pattern: '\\d{4}', label: 'digits' }]),
