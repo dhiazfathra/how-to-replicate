@@ -3,6 +3,11 @@ import { PHI_PATTERNS } from '../../src/redaction/patterns.js';
 import { parseRuleset, type RedactionRuleset } from '../../src/redaction/ruleset.js';
 import { truncateBody, MAX_BODY_BYTES } from '../../src/redaction/truncate.js';
 
+// re-exported so the test file can run the same real pipeline step
+// (truncate-then-redact) instead of only exercising the redactor in
+// isolation for content-type-drop fixtures.
+export { truncateBody };
+
 /**
  * The ruleset a real deployment would configure on top of the built-in PHI
  * patterns: a field-path rule for a known patient-name field (names have no
@@ -25,14 +30,16 @@ export type CorpusFixture = {
   event: CaptureEvent;
   /** Synthetic PHI literals this fixture introduces; must never leak. */
   forbidden: string[];
-  /**
-   * Set to false only when the fixture's PHI never reaches the redactor at
-   * all (e.g. dropped upstream by content-type policy) — such a fixture is
-   * correctly `fidelity: 'full'` because there is nothing left to redact.
-   */
-  expectRedacted?: boolean;
   /** For the key-collision fixture: assert non-destructive key rewriting. */
   keyCountCheck?: { field: 'requestBody' | 'responseBody'; original: unknown };
+  /**
+   * For fixtures whose PHI is meant to be dropped by content-type policy
+   * rather than by a redaction rule: the raw content type header. The test
+   * runs `truncateBody` — the real pipeline step, not fixture-time
+   * pre-processing — against the fixture's as-authored `requestBody` before
+   * handing the result to the redactor, so the drop is what's under test.
+   */
+  truncateContentType?: string;
 };
 
 function baseEvent(id: string, kind: CaptureEvent['kind'], payload: CaptureEvent['payload']): CaptureEvent {
@@ -53,6 +60,7 @@ function toUnicodeEscaped(value: string): string {
 // Synthetic PHI literals — never real data.
 const NIK_NESTED = '3175010203040001';
 const DOB_ISO = '1990-05-14';
+const DOB_DMY = '14/05/1990';
 const PHONE_NESTED = '081234567890';
 const EMAIL_NESTED = 'siti.rahayu@example.com';
 const PATIENT_NAME_1 = 'Siti Rahayu';
@@ -81,7 +89,7 @@ const NIK_FRAGMENT = '3175010203040008';
 const EMAIL_FRAGMENT = 'siti.rahayu4@example.com';
 
 const requestBodyNested = JSON.stringify({
-  patient: { name: PATIENT_NAME_1, nik: NIK_NESTED, dob: DOB_ISO },
+  patient: { name: PATIENT_NAME_1, nik: NIK_NESTED, dob: DOB_ISO, dobAlt: DOB_DMY },
   visits: [
     { doctor: 'Dr. Andi', notes: `Patient contact ${PHONE_NESTED}` },
     { doctor: 'Dr. Budi', notes: { email: EMAIL_NESTED } },
@@ -122,19 +130,36 @@ function networkPayloadDefaults(): CaptureEvent['payload'] & {
 }
 
 // --- truncation-boundary fixture: NIK straddles the 32KB cutoff -----------
-
-const truncationFiller = 'x'.repeat(MAX_BODY_BYTES - 8);
-const rawTruncationBody = JSON.stringify({ note: `${truncationFiller}${NIK_TRUNCATED} end` });
+//
+// Layout: `{"note":"` (9 bytes) + filler + " " + the 16-digit NIK + " end"}`.
+// The filler is sized so the cut lands exactly 13 digits into the NIK — the
+// first 13 survive into the truncated body, the last 3 are cut away. Those
+// 13 surviving digits form a bounded digit run (space before, end-of-string
+// after) that itself matches `builtin:bpjs` (\b\d{13}\b), so this fixture
+// proves two things at once: the full 16-digit NIK never survives truncation
+// intact, AND the partial fragment that *does* survive still gets redacted
+// by an existing rule rather than leaking as plaintext digits.
+const TRUNCATION_PREFIX_LEN = 9; // `{"note":"`.length
+const TRUNCATION_SUFFIX_DIGITS = 13;
+const truncationFillerLen = MAX_BODY_BYTES - TRUNCATION_PREFIX_LEN - 1 - TRUNCATION_SUFFIX_DIGITS;
+const truncationFiller = 'x'.repeat(truncationFillerLen);
+const NIK_TRUNCATED_SURVIVING_PREFIX = NIK_TRUNCATED.slice(0, TRUNCATION_SUFFIX_DIGITS);
+const rawTruncationBody = `{"note":"${truncationFiller} ${NIK_TRUNCATED} end"}`;
 const truncated = truncateBody(rawTruncationBody, 'application/json');
 
-// --- content-type-not-allowed fixture: dropped before the redactor sees it -
-
+// --- content-type-not-allowed fixture --------------------------------------
+//
+// The raw, unprocessed PHI-bearing body and its disallowed content type are
+// kept on the constructed event as authored — nothing is pre-dropped here.
+// The corpus test runs `truncateBody` itself (the real pipeline step) against
+// this fixture before redaction, so the content-type drop is what's actually
+// under test rather than assumed.
 const rawDroppedBody = `contact ${PHONE_DROPPED_CONTENT_TYPE}`;
-const droppedByContentType = truncateBody(rawDroppedBody, 'application/octet-stream');
 
 // --- unicode-escaped PHI fixture -------------------------------------------
 
-const requestBodyUnicode = `{"note":"${toUnicodeEscaped(PHONE_UNICODE)}"}`;
+const unicodeEscapedPhone = toUnicodeEscaped(PHONE_UNICODE);
+const requestBodyUnicode = `{"note":"${unicodeEscapedPhone}"}`;
 
 export const FIXTURES: CorpusFixture[] = [
   {
@@ -144,7 +169,16 @@ export const FIXTURES: CorpusFixture[] = [
       requestBody: requestBodyNested,
       responseBody: responseBodyJson,
     }),
-    forbidden: [PATIENT_NAME_1, NIK_NESTED, DOB_ISO, PHONE_NESTED, EMAIL_NESTED, BPJS_RESPONSE, MRN_RESPONSE],
+    forbidden: [
+      PATIENT_NAME_1,
+      NIK_NESTED,
+      DOB_ISO,
+      DOB_DMY,
+      PHONE_NESTED,
+      EMAIL_NESTED,
+      BPJS_RESPONSE,
+      MRN_RESPONSE,
+    ],
   },
   {
     id: 'request-and-response-headers',
@@ -218,11 +252,7 @@ export const FIXTURES: CorpusFixture[] = [
       bodyTruncated: truncated.bodyTruncated,
       bodyDropped: truncated.bodyDropped,
     }),
-    forbidden: [NIK_TRUNCATED],
-    // Truncation lands mid-NIK, so no rule has anything left to touch — the
-    // full literal never reaches the redactor in one piece. `fidelity: 'full'`
-    // here means the truncation layer already did its job, not a leak.
-    expectRedacted: false,
+    forbidden: [NIK_TRUNCATED, NIK_TRUNCATED_SURVIVING_PREFIX],
   },
   {
     id: 'adversarial-non-json-body',
@@ -236,12 +266,11 @@ export const FIXTURES: CorpusFixture[] = [
     id: 'adversarial-disallowed-content-type',
     event: baseEvent('evt-adv-contenttype', 'network', {
       ...networkPayloadDefaults(),
-      requestBody: droppedByContentType.body,
-      bodyDropped: droppedByContentType.bodyDropped,
-      bodyTruncated: droppedByContentType.bodyTruncated,
+      requestHeaders: { 'Content-Type': 'application/octet-stream' },
+      requestBody: rawDroppedBody,
     }),
     forbidden: [PHONE_DROPPED_CONTENT_TYPE],
-    expectRedacted: false,
+    truncateContentType: 'application/octet-stream',
   },
   {
     id: 'adversarial-phi-in-key',
@@ -266,7 +295,10 @@ export const FIXTURES: CorpusFixture[] = [
       ...networkPayloadDefaults(),
       requestBody: requestBodyUnicode,
     }),
-    forbidden: [PHONE_UNICODE],
+    // Both the decoded literal (must not survive redaction) and the raw
+    // escape sequence itself (must not pass through unredacted if JSON.parse
+    // ever fails to decode it first) are forbidden.
+    forbidden: [PHONE_UNICODE, unicodeEscapedPhone],
   },
   {
     id: 'adversarial-url-fragment',
