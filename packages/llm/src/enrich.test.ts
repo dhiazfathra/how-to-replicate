@@ -447,4 +447,52 @@ describe('enrichDoc', () => {
 
     expect(result.generator).toBe('deterministic');
   });
+
+  it('drops a fabricated POST even when the GET event URL contains "get" as a substring (word-boundary regression)', async () => {
+    const events = [
+      event('network-1', {
+        kind: 'network',
+        payload: {
+          method: 'GET',
+          url: '/api/target',
+          status: 200,
+          requestHeaders: {},
+          responseHeaders: {},
+          requestBody: null,
+          responseBody: null,
+          bodyTruncated: false,
+          bodyDropped: false,
+          durationMs: 1,
+          sizeBytes: 0,
+        },
+      }),
+    ];
+    // "target" contains "get" as a bare substring — must not count as
+    // correctly naming the method.
+    const response = JSON.stringify([
+      { text: 'A POST to /api/target returned 200', eventIds: ['network-1'] },
+    ]);
+
+    const result = await enrichDoc({ doc: baseDoc(), events, provider: providerReturning(response) });
+
+    expect(result.generator).toBe('deterministic');
+  });
+
+  it('drops a fabricated error level even when "log" appears inside "login" (word-boundary regression)', async () => {
+    const events = [
+      event('console-1', {
+        kind: 'console',
+        payload: { level: 'log', text: 'login', stack: null },
+      }),
+    ];
+    // "login" contains "log" as a bare substring — must not count as
+    // correctly naming the level, and must not mask the wrong word "error".
+    const response = JSON.stringify([
+      { text: 'An error during login: login', eventIds: ['console-1'] },
+    ]);
+
+    const result = await enrichDoc({ doc: baseDoc(), events, provider: providerReturning(response) });
+
+    expect(result.generator).toBe('deterministic');
+  });
 });

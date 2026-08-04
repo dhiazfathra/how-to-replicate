@@ -60,6 +60,17 @@ const NAVIGATION_TRIGGERS: NavigationPayload['trigger'][] = [
 ];
 
 /**
+ * Whole-word, case-insensitive match. Plain `.includes()` would let "get"
+ * match inside "target" or "log" match inside "login" — a coincidental
+ * substring hit, not a real claim about the word. `\b` word boundaries rule
+ * that out; every option word here is plain alphanumeric, so no escaping is
+ * needed.
+ */
+function containsWord(text: string, word: string): boolean {
+  return new RegExp(`\\b${word}\\b`, 'i').test(text);
+}
+
+/**
  * A step can quote a real, cited event's payload verbatim while still
  * asserting something false about it — "Clicked Save" anchored to an
  * `input` event whose target happens to be named "Save", for instance. For
@@ -69,11 +80,10 @@ const NAVIGATION_TRIGGERS: NavigationPayload['trigger'][] = [
  * names the event's actual value, it's describing the wrong thing and must
  * not survive on the strength of an unrelated substring match.
  */
-function namesWrongOption(lowerText: string, options: readonly string[], correct: string): boolean {
-  const correctLower = correct.toLowerCase();
-  const namesCorrect = lowerText.includes(correctLower);
+function namesWrongOption(text: string, options: readonly string[], correct: string): boolean {
+  const namesCorrect = containsWord(text, correct);
   const namesWrongSibling = options.some(
-    (option) => option.toLowerCase() !== correctLower && lowerText.includes(option.toLowerCase()),
+    (option) => option.toLowerCase() !== correct.toLowerCase() && containsWord(text, option),
   );
   return namesWrongSibling && !namesCorrect;
 }
@@ -105,11 +115,12 @@ function describesEvent(text: string, event: CaptureEvent): boolean {
     }
     case 'network': {
       const p = event.payload as NetworkPayload;
-      return (
-        includesText(lower, p.url) &&
-        !namesWrongOption(lower, NETWORK_METHODS, p.method) &&
-        !namesWrongStatus(lower, p.url, p.status)
-      );
+      if (!includesText(lower, p.url)) return false;
+      // Strip the URL before checking the method/status — a path segment
+      // like "/api/get-report" or "/patients/123" must never be mistaken
+      // for a claimed method or status code.
+      const withoutUrl = lower.split(p.url.toLowerCase()).join(' ');
+      return !namesWrongOption(withoutUrl, NETWORK_METHODS, p.method) && !namesWrongStatus(lower, p.url, p.status);
     }
     case 'interaction': {
       const p = event.payload as InteractionPayload;
