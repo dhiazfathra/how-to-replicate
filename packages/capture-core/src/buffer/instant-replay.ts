@@ -11,6 +11,11 @@ export type VideoChunk = {
   t: number;
 };
 
+export type Screenshot = {
+  dataUrl: string;
+  t: number;
+};
+
 export type InstantReplayOptions = {
   redactor: Redactor;
   ring: RingBuffer<CaptureEvent>;
@@ -29,6 +34,9 @@ export type InstantReplay = {
   events(): CaptureEvent[];
   pushVideoChunk(data: Uint8Array | Blob): void;
   videoChunks(): VideoChunk[];
+  /** Degraded-mode visual-evidence floor (invariant 2's "screenshot-only" path). Same window as video chunks. */
+  pushScreenshot(dataUrl: string): void;
+  screenshots(): Screenshot[];
 };
 
 export const VIDEO_WINDOW_MS = 120_000;
@@ -45,11 +53,12 @@ export function createInstantReplay(options: InstantReplayOptions): InstantRepla
   let withheld = 0;
   let evicted = 0;
   const videoChunks: VideoChunk[] = [];
+  const screenshots: Screenshot[] = [];
 
-  function releaseExpiredChunks(): void {
+  function releaseExpired<T extends { t: number }>(items: T[]): void {
     const cutoff = clock.now() - windowMs;
-    while (videoChunks.length > 0 && videoChunks[0]!.t < cutoff) {
-      videoChunks.shift();
+    while (items.length > 0 && items[0]!.t < cutoff) {
+      items.shift();
     }
   }
 
@@ -78,12 +87,22 @@ export function createInstantReplay(options: InstantReplayOptions): InstantRepla
 
     pushVideoChunk(data: Uint8Array | Blob): void {
       videoChunks.push({ data, t: clock.now() });
-      releaseExpiredChunks();
+      releaseExpired(videoChunks);
     },
 
     videoChunks(): VideoChunk[] {
-      releaseExpiredChunks();
+      releaseExpired(videoChunks);
       return [...videoChunks];
+    },
+
+    pushScreenshot(dataUrl: string): void {
+      screenshots.push({ dataUrl, t: clock.now() });
+      releaseExpired(screenshots);
+    },
+
+    screenshots(): Screenshot[] {
+      releaseExpired(screenshots);
+      return [...screenshots];
     },
   };
 }

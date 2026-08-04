@@ -179,4 +179,19 @@ describe('createInstantReplay', () => {
     clock.advance(11);
     expect(replay.videoChunks()).toHaveLength(0);
   });
+
+  it('holds screenshots within the window and releases them past it', () => {
+    const clock = fixedClock(0);
+    const replay = createInstantReplay({
+      redactor: emailRedactor(),
+      ring: createRingBuffer<CaptureEvent>(),
+      clock,
+      windowMs: 100,
+    });
+    replay.pushScreenshot('data:image/png;base64,a');
+    expect(replay.screenshots()).toEqual([{ dataUrl: 'data:image/png;base64,a', t: 0 }]);
+
+    clock.advance(101);
+    expect(replay.screenshots()).toHaveLength(0);
+  });
 });

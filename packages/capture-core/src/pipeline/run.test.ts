@@ -55,6 +55,8 @@ function fakeBuffer(events: CaptureEvent[], withheld: number): InstantReplay {
     events: () => events,
     pushVideoChunk: () => undefined,
     videoChunks: () => [],
+    pushScreenshot: () => undefined,
+    screenshots: () => [],
   };
 }
 

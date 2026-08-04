@@ -13,6 +13,7 @@ import type { ChromeAdapter, DebuggerTarget } from '../lib/chrome-adapter.js';
 import { createRulesetStore, type RulesetStore } from './ruleset-store.js';
 import { attachCdp, type CdpSession } from './cdp.js';
 import { buildDegradedHandoffEvent, startFallback, type FallbackSession } from './fallback.js';
+import { createOffscreenRelayListener } from './offscreen-relay.js';
 
 const OFFSCREEN_URL = 'offscreen.html';
 const OFFSCREEN_REASONS = ['DISPLAY_MEDIA'];
@@ -111,6 +112,12 @@ export function createServiceWorker(chromeApi: ChromeAdapter): ServiceWorker {
           onEvent,
         );
       });
+
+      chromeApi.runtime.onMessage.addListener(
+        createOffscreenRelayListener(capture.id, buffer, clock, () => {
+          active.capture = { ...active.capture, fidelity: 'degraded' };
+        }),
+      );
 
       return active;
     },
