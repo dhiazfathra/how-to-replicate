@@ -41,7 +41,7 @@ export type GithubConfig = {
  */
 export function createGithubProvider(config: GithubConfig): TrackerProvider & {
   requestDeviceCode(): Promise<DeviceCodeResponse>;
-  pollDeviceCode(deviceCode: string): Promise<DevicePollResult>;
+  pollDeviceCode(deviceCode: string, currentIntervalSeconds: number): Promise<DevicePollResult>;
 };
 export function createGithubProvider(config: GithubConfig) {
   const doFetch = config.fetch ?? fetch;
