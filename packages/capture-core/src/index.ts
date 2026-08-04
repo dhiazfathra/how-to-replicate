@@ -8,3 +8,7 @@ export * from './redaction/ruleset.js';
 export * from './redaction/engine.js';
 export * from './redaction/patterns.js';
 export * from './redaction/truncate.js';
+export * from './storage/schema.js';
+export * from './storage/db.js';
+export * from './storage/repository.js';
+export * from './storage/budget.js';
