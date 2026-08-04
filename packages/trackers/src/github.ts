@@ -58,7 +58,18 @@ export function createGithubProvider(config: GithubConfig) {
     return (await res.json()) as DeviceCodeResponse;
   }
 
-  async function pollDeviceCode(deviceCode: string): Promise<DevicePollResult> {
+  /**
+   * `currentIntervalSeconds` is the interval this poll was made at (the
+   * caller's running state, seeded from the device-code response). Per
+   * RFC 8628 §3.5, `slow_down` means "you are polling too fast **right
+   * now**" — the new interval must be the current one plus at least 5
+   * seconds, cumulatively, not a flat reset. `authorization_pending` means
+   * no change: keep polling at the same interval the caller already has.
+   */
+  async function pollDeviceCode(
+    deviceCode: string,
+    currentIntervalSeconds: number,
+  ): Promise<DevicePollResult> {
     const res = await doFetch(ACCESS_TOKEN_URL, {
       method: 'POST',
       headers: { 'content-type': 'application/json', accept: 'application/json' },
@@ -75,9 +86,9 @@ export function createGithubProvider(config: GithubConfig) {
     if ('error' in json) {
       switch (json.error) {
         case 'authorization_pending':
-          return { status: 'pending', intervalSeconds: 5 };
+          return { status: 'pending', intervalSeconds: currentIntervalSeconds };
         case 'slow_down':
-          return { status: 'pending', intervalSeconds: 10 };
+          return { status: 'pending', intervalSeconds: currentIntervalSeconds + 5 };
         case 'expired_token':
           return { status: 'expired' };
         case 'access_denied':
@@ -98,14 +109,14 @@ export function createGithubProvider(config: GithubConfig) {
 
   /**
    * Runs the full device-flow poll loop: request a device code, then poll at
-   * the server-advertised interval (honouring `slow_down` by backing off)
-   * until authorized, denied, or expired.
+   * the server-advertised interval (honouring `slow_down` by backing off
+   * cumulatively, per RFC 8628) until authorized, denied, or expired.
    */
   async function authorize(): Promise<AuthResult> {
     const { device_code, interval } = await requestDeviceCode();
     let waitSeconds = interval;
     for (;;) {
-      const result = await pollDeviceCode(device_code);
+      const result = await pollDeviceCode(device_code, waitSeconds);
       if (result.status === 'authorized') return result.auth;
       if (result.status === 'denied') throw new Error('github: authorization denied');
       if (result.status === 'expired') throw new Error('github: device code expired');

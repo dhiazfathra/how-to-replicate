@@ -45,16 +45,16 @@ describe('createGithubProvider requestDeviceCode / pollDeviceCode', () => {
     const fetch = vi.fn().mockResolvedValue(jsonResponse(pollPending));
     const provider = createGithubProvider({ ...baseConfig, fetch });
 
-    const result = await provider.pollDeviceCode('device-code');
+    const result = await provider.pollDeviceCode('device-code', 5);
 
     expect(result).toEqual({ status: 'pending', intervalSeconds: 5 });
   });
 
-  it('surfaces slow_down as pending with a longer interval', async () => {
+  it('surfaces slow_down as pending with the interval increased by at least 5s (RFC 8628 §3.5)', async () => {
     const fetch = vi.fn().mockResolvedValue(jsonResponse(pollSlowDown));
     const provider = createGithubProvider({ ...baseConfig, fetch });
 
-    const result = await provider.pollDeviceCode('device-code');
+    const result = await provider.pollDeviceCode('device-code', 5);
 
     expect(result).toEqual({ status: 'pending', intervalSeconds: 10 });
   });
@@ -63,35 +63,35 @@ describe('createGithubProvider requestDeviceCode / pollDeviceCode', () => {
     const fetch = vi.fn().mockResolvedValue(jsonResponse(pollExpired));
     const provider = createGithubProvider({ ...baseConfig, fetch });
 
-    expect(await provider.pollDeviceCode('device-code')).toEqual({ status: 'expired' });
+    expect(await provider.pollDeviceCode('device-code', 5)).toEqual({ status: 'expired' });
   });
 
   it('surfaces access_denied as terminal denied', async () => {
     const fetch = vi.fn().mockResolvedValue(jsonResponse(pollDenied));
     const provider = createGithubProvider({ ...baseConfig, fetch });
 
-    expect(await provider.pollDeviceCode('device-code')).toEqual({ status: 'denied' });
+    expect(await provider.pollDeviceCode('device-code', 5)).toEqual({ status: 'denied' });
   });
 
   it('throws on an unrecognized error code', async () => {
     const fetch = vi.fn().mockResolvedValue(jsonResponse({ error: 'something_else' }));
     const provider = createGithubProvider({ ...baseConfig, fetch });
 
-    await expect(provider.pollDeviceCode('device-code')).rejects.toThrow(/something_else/);
+    await expect(provider.pollDeviceCode('device-code', 5)).rejects.toThrow(/something_else/);
   });
 
   it('throws when the poll request fails', async () => {
     const fetch = vi.fn().mockResolvedValue(jsonResponse({}, false, 500));
     const provider = createGithubProvider({ ...baseConfig, fetch });
 
-    await expect(provider.pollDeviceCode('device-code')).rejects.toThrow(/status 500/);
+    await expect(provider.pollDeviceCode('device-code', 5)).rejects.toThrow(/status 500/);
   });
 
   it('returns authorized with the access/refresh tokens on success', async () => {
     const fetch = vi.fn().mockResolvedValue(jsonResponse(pollSuccess));
     const provider = createGithubProvider({ ...baseConfig, fetch });
 
-    const result = await provider.pollDeviceCode('device-code');
+    const result = await provider.pollDeviceCode('device-code', 5);
 
     expect(result).toEqual({
       status: 'authorized',
