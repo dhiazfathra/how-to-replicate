@@ -16,6 +16,10 @@ function copyManifest(): Plugin {
   };
 }
 
+// Only the two module contexts. The content script is deliberately NOT built
+// here: it is a classic script (MV3 `content_scripts` has no module mode), so
+// it cannot be code-split into shared `import`-ing chunks the way these two
+// can. It gets its own single-file IIFE build — see `vite.content.config.ts`.
 export default defineConfig({
   plugins: [copyManifest()],
   build: {
@@ -24,7 +28,6 @@ export default defineConfig({
     rollupOptions: {
       input: {
         'background/main': resolve(root, 'src/background/main.ts'),
-        'content/main': resolve(root, 'src/content/main.ts'),
         'offscreen/main': resolve(root, 'src/offscreen/main.ts'),
       },
       output: {

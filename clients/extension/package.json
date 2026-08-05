@@ -6,7 +6,7 @@
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "scripts": {
-    "build": "vite build"
+    "build": "vite build && vite build --config vite.content.config.ts"
   },
   "devDependencies": {
     "@htr/capture-core": "workspace:*",

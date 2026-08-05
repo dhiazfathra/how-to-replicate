@@ -84,11 +84,20 @@ async function main(): Promise<void> {
     source,
     canvasTarget,
     (canvasStream) => wrapMediaRecorder(canvasStream as MediaStream),
-    { requestFrame: requestAnimationFrame },
+    // Wrapped, not passed bare: these seams are called as methods on the
+    // injected object (`scheduler.requestFrame(...)`, `timer.setInterval(...)`),
+    // and a DOM global invoked with an object `this` throws "Illegal
+    // invocation".
+    { requestFrame: (callback) => window.requestAnimationFrame(callback) },
     { now: () => performance.now() },
     sink,
     screenshot,
-    { setInterval, clearInterval },
+    {
+      setInterval: (callback, ms) => window.setInterval(callback, ms),
+      clearInterval: (handle) => {
+        window.clearInterval(handle as number);
+      },
+    },
   );
 
   chrome.runtime.onMessage.addListener(createBlurRegionsListener(captureId, handle));

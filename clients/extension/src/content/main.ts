@@ -30,7 +30,10 @@ chrome.runtime.onMessage.addListener(
       stopBlurTracking = startBlurRegionTracking(
         doc,
         runtimePoster,
-        { requestFrame: requestAnimationFrame },
+        // Wrapped, not passed bare: the scheduler seam calls this as
+        // `scheduler.requestFrame(...)`, and a `requestAnimationFrame`
+        // reference invoked with an object `this` throws "Illegal invocation".
+        { requestFrame: (callback) => window.requestAnimationFrame(callback) },
         captureId,
         blurSelectors,
       );

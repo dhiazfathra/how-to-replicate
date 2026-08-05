@@ -84,7 +84,10 @@ async function start(): Promise<void> {
     source: { get width() { return canvas.width; }, get height() { return canvas.height; }, get frame() { return video; } },
     canvas: canvasTarget,
     createMediaRecorder: (canvasStream) => wrapMediaRecorder(canvasStream as MediaStream),
-    scheduler: { requestFrame: requestAnimationFrame },
+    // Wrapped, not passed bare: `startRecording` calls this as
+    // `scheduler.requestFrame(...)`, and a `requestAnimationFrame` reference
+    // invoked with an object `this` throws "Illegal invocation".
+    scheduler: { requestFrame: (callback) => window.requestAnimationFrame(callback) },
     onChunk: (chunk) => chunks.push(chunk),
   });
 
