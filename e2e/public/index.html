@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Clinic Portal — deliberately buggy demo</title>
+    <style>
+      body {
+        font: 15px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        margin: 0;
+        padding: 24px;
+        color: #111;
+        background: #fff;
+      }
+      h1 {
+        font-size: 20px;
+        margin: 0 0 4px;
+      }
+      #patient-banner {
+        background: #fff4e5;
+        border: 1px solid #f0c898;
+        border-radius: 6px;
+        padding: 8px 12px;
+        margin: 12px 0 20px;
+      }
+      fieldset {
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        max-width: 460px;
+      }
+      label {
+        display: block;
+        margin-bottom: 10px;
+      }
+      input {
+        display: block;
+        width: 100%;
+        box-sizing: border-box;
+        padding: 6px 8px;
+        margin-top: 2px;
+      }
+      button,
+      a.navlink {
+        display: inline-block;
+        margin: 4px 6px 4px 0;
+        padding: 7px 12px;
+        border: 1px solid #999;
+        border-radius: 5px;
+        background: #f6f6f6;
+        cursor: pointer;
+        font: inherit;
+        color: inherit;
+        text-decoration: none;
+      }
+      #route {
+        margin-top: 20px;
+        font-weight: 600;
+      }
+      #log {
+        margin-top: 12px;
+        color: #a11;
+        min-height: 1.5em;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Clinic Portal</h1>
+    <p>A deliberately broken demo app. Everything below is synthetic test data.</p>
+
+    <!-- Synthetic PHI planted in the DOM. The e2e asserts none of it survives
+         into a persisted capture event. -->
+    <p id="patient-banner">
+      Patient: Budi Santoso &middot; MRN-4471902 &middot; NIK 3174091203880007 &middot; DOB
+      1988-03-12 &middot; budi.santoso@clinic.example &middot; +6281234567890
+    </p>
+
+    <form id="lookup-form">
+      <fieldset>
+        <legend>Patient lookup</legend>
+        <label for="mrn-field">
+          Medical record number
+          <input id="mrn-field" name="mrn" type="text" autocomplete="off" />
+        </label>
+        <label for="email-field">
+          Contact email
+          <input id="email-field" name="email" type="text" autocomplete="off" />
+        </label>
+        <button id="submit-lookup" type="submit">Look up patient</button>
+      </fieldset>
+    </form>
+
+    <p>
+      <button id="open-chart" type="button">Open chart for MRN-4471902</button>
+      <button id="load-chart" data-testid="load-chart" type="button">Load chart (v2 API)</button>
+      <button id="load-chart-legacy" data-testid="load-chart-legacy" type="button">
+        Load chart (legacy API)
+      </button>
+      <button id="crash" data-testid="crash" type="button">Trigger the bug</button>
+      <a class="navlink" id="nav-billing" href="#/billing">Go to billing</a>
+    </p>
+
+    <div id="route">Route: #/patients</div>
+    <div id="log"></div>
+
+    <script type="module" src="/harness.js"></script>
+    <script>
+      // --- the "app" ------------------------------------------------------
+      // Plain, un-instrumented page code. It knows nothing about capture; the
+      // harness observes it exactly the way the extension observes a real app.
+      const PATIENT = {
+        mrn: 'MRN-4471902',
+        email: 'budi.santoso@clinic.example',
+        nik: '3174091203880007',
+        dob: '1988-03-12',
+        phone: '+6281234567890',
+      };
+
+      const log = document.getElementById('log');
+
+      document.getElementById('lookup-form').addEventListener('submit', (event) => {
+        event.preventDefault();
+        log.textContent = 'Lookup submitted.';
+      });
+
+      document.getElementById('open-chart').addEventListener('click', () => {
+        log.textContent = 'Opening chart…';
+      });
+
+      // v2 API: sends `patient` as an object, the shape the ruleset's
+      // field-path rule expects. Server answers 500.
+      document.getElementById('load-chart').addEventListener('click', async () => {
+        await postChart({ patient: { ...PATIENT }, note: 'chart requested from portal' });
+      });
+
+      // Legacy API: sends `patient` as a bare string. The `/patient/mrn`
+      // pointer then lands on a scalar, the redaction rule cannot resolve it,
+      // and the engine fails closed by dropping the event entirely.
+      document.getElementById('load-chart-legacy').addEventListener('click', async () => {
+        await postChart({ patient: PATIENT.mrn, note: 'legacy chart request' });
+      });
+
+      async function postChart(body) {
+        try {
+          const response = await fetch(`/api/patient-chart?mrn=${encodeURIComponent(PATIENT.mrn)}`, {
+            method: 'POST',
+            headers: {
+              'content-type': 'application/json',
+              authorization: 'Bearer clinic-session-token-abc123',
+            },
+            body: JSON.stringify(body),
+          });
+          log.textContent = `Chart request failed: HTTP ${response.status}`;
+        } catch (error) {
+          log.textContent = `Chart request failed: ${String(error)}`;
+        }
+      }
+
+      // The bug: logs PHI to the console, then throws asynchronously so the
+      // exception is genuinely uncaught (CDP Runtime.exceptionThrown).
+      document.getElementById('crash').addEventListener('click', () => {
+        console.error(
+          `Chart render failed for ${PATIENT.mrn} (${PATIENT.email}, NIK ${PATIENT.nik})`,
+        );
+        setTimeout(() => {
+          throw new TypeError(
+            `Cannot read properties of undefined (reading 'vitals') for ${PATIENT.mrn}`,
+          );
+        }, 0);
+      });
+
+      window.addEventListener('hashchange', () => {
+        document.getElementById('route').textContent = `Route: ${location.hash || '#/patients'}`;
+      });
+    </script>
+  </body>
+</html>

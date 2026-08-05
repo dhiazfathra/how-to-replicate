@@ -3,11 +3,12 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['**/dist/**', '**/coverage/**', '**/node_modules/**'],
+    // `e2e/public/harness.js` is the esbuild-bundled harness, not source.
+    ignores: ['**/dist/**', '**/coverage/**', '**/node_modules/**', 'e2e/public/harness.js'],
   },
   js.configs.recommended,
   {
-    files: ['packages/**/src/**/*.ts', 'clients/**/src/**/*.ts'],
+    files: ['packages/**/src/**/*.ts', 'clients/**/src/**/*.ts', 'e2e/**/*.ts'],
     extends: [...tseslint.configs.recommendedTypeChecked],
     languageOptions: {
       parserOptions: {
@@ -17,7 +18,7 @@ export default tseslint.config(
     },
   },
   {
-    files: ['**/*.config.ts', 'scripts/*.mjs', '**/*.test.mjs'],
+    files: ['**/*.config.ts', 'scripts/*.mjs', 'e2e/*.mjs', '**/*.test.mjs'],
     extends: [...tseslint.configs.recommended],
     languageOptions: {
       parserOptions: {

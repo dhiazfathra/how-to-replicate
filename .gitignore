@@ -143,3 +143,12 @@ vite.config.ts.timestamp-*
 .vite/
 .worktrees/
 .superpowers/
+
+# Playwright / e2e
+test-results/
+playwright-report/
+.playwright/
+e2e/public/harness.js
+e2e/artifacts/test-results/
+e2e/artifacts/report/
+# e2e/artifacts/videos/ is committed on purpose — it is the recorded evidence.
