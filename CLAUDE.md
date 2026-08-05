@@ -3,8 +3,10 @@
 Bug-capture tool. Every capture produces one artifact: a **How to Replicate
 document** — ordered repro steps, each citing the events that evidence it.
 
-**Phase 0 implementation is underway.** See [README status](README.md#status) for
-what's built. Read [the spec](docs/superpowers/specs/2026-08-04-how-to-replicate-design.md) and
+**Phase 0 is implemented** — three clients, three packages, unit tests plus a
+Playwright e2e suite (`pnpm e2e`) that drives real Chromium. Phases 1-3 are still
+spec only. Read
+[the spec](docs/superpowers/specs/2026-08-04-how-to-replicate-design.md) and
 [ADR-001](docs/decisions/ADR-001-local-first-architecture.md) /
 [ADR-002](docs/decisions/ADR-002-client-only-phase-0.md) before proposing anything —
 every other decision is downstream of those two.
