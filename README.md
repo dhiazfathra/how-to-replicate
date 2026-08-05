@@ -171,6 +171,16 @@ Events reach the pipeline through a real CDP session (`Network`, `Runtime`, `Con
 domains), mapped by the extension's own `mapCdpEvent`. Playwright stands in for
 `chrome.debugger` at that one seam; everything downstream is product code.
 
+The redacted console and network events those two pipeline specs persist are dumped
+as committed JSON evidence alongside the videos:
+[`e2e/artifacts/events/full-pipeline.json`](e2e/artifacts/events/full-pipeline.json)
+and
+[`invariant-4-degraded.json`](e2e/artifacts/events/invariant-4-degraded.json). They
+show the real captured console error and `POST /api/patient-chart` request/response —
+with the synthetic PHI in the URL, headers, and body replaced by
+`[REDACTED:*]`/`[REDACTED]` and the exact redaction rules that fired recorded per
+event.
+
 ### What the e2e does not cover
 
 Stated plainly, because a test suite that overstates itself is worse than a small one:

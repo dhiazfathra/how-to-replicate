@@ -1,6 +1,26 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { expect, test } from '@playwright/test';
 import type { Capture, CaptureEvent, NetworkPayload } from '@htr/capture-core';
 import { AUTH_TOKEN, BASE_URL, PHI, bridgeCdpToHarness, reproduceTheBug } from './support.js';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const EVIDENCE_DIR = path.join(here, 'artifacts/events');
+
+/**
+ * Persist the real captured console/network events (post-redaction) as
+ * committed evidence, next to the video recordings. Same opt-in as
+ * `collect-evidence.ts` — a plain local `pnpm e2e` should not dirty the tree.
+ */
+function dumpEvents(name: string, capture: Capture, events: CaptureEvent[]): void {
+  if (!process.env.HTR_REFRESH_EVIDENCE) return;
+  fs.mkdirSync(EVIDENCE_DIR, { recursive: true });
+  fs.writeFileSync(
+    path.join(EVIDENCE_DIR, `${name}.json`),
+    JSON.stringify({ capture, events }, null, 2),
+  );
+}
 
 /** `CaptureEvent.payload` is a union keyed by `kind`, with no discriminant field of its own. */
 function networkPayload(event: CaptureEvent): NetworkPayload {
@@ -96,6 +116,7 @@ test('full pipeline: real browser events become a redacted How to Replicate docu
   expectRedactionActuallyHappened(events);
   expectNoPhi('persisted events', JSON.stringify(events));
   expectNoPhi('persisted capture record', JSON.stringify(capture));
+  dumpEvents('full-pipeline', capture, events);
 
   // --- invariant 3 ---------------------------------------------------------
   expectEveryCitationResolves(capture, events);
@@ -186,6 +207,7 @@ test('invariant 4: a redaction drop degrades the capture and the viewer says so'
 
   const events = await page.evaluate((id) => window.__htr.readEvents(id), capture.id);
   expectNoPhi('persisted events', JSON.stringify(events));
+  dumpEvents('invariant-4-degraded', capture, events);
   expect(
     events.some(
       (e) => e.kind === 'network' && (e.payload as NetworkPayload).url.includes('patient-chart'),

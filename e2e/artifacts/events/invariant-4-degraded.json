@@ -1,0 +1,354 @@
+{
+  "capture": {
+    "id": "01KZ7X4TM8VGM74BDT2JEYCP02",
+    "workspaceId": null,
+    "projectId": "clinic-portal",
+    "source": "extension",
+    "state": "ready",
+    "fidelity": "degraded",
+    "createdAt": "2026-08-05T02:48:21.384Z",
+    "epoch": 1785898101384.6,
+    "env": {
+      "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.7922.34 Safari/537.36",
+      "platform": "MacIntel",
+      "viewport": {
+        "w": 1100,
+        "h": 720
+      },
+      "devicePixelRatio": 1,
+      "locale": "en-US",
+      "timezone": "Asia/Jakarta",
+      "url": "http://127.0.0.1:5178/"
+    },
+    "metadata": {
+      "rulesetVersion": "2026-08-05.e2e.1"
+    },
+    "doc": {
+      "title": "Chart render failed for [REDACTED:mrn] ([REDACTED:email], NIK [REDACTED:nik])",
+      "summary": "9 step(s) recorded deterministically.",
+      "steps": [
+        {
+          "n": 1,
+          "text": "Typed into \"Medical record number\" on http://127.0.0.1:5178/",
+          "eventIds": [
+            "01KZ7X4TN233PAXGV8A8FZEEKZ"
+          ],
+          "tVideo": null
+        },
+        {
+          "n": 2,
+          "text": "Typed into \"Contact email\" on http://127.0.0.1:5178/",
+          "eventIds": [
+            "01KZ7X4TN95NRDVJEDB6M01KKX"
+          ],
+          "tVideo": null
+        },
+        {
+          "n": 3,
+          "text": "Clicked \"Look up patient\" on http://127.0.0.1:5178/",
+          "eventIds": [
+            "01KZ7X4TNVHKZR9PX5A96WTBQ7"
+          ],
+          "tVideo": null
+        },
+        {
+          "n": 4,
+          "text": "Submitted \"Patient lookup\\n        \\n          Medical record number\\n          \\n        \\n        \\n          Contact email\\n          \\n        \\n        Look up patient\" on http://127.0.0.1:5178/",
+          "eventIds": [
+            "01KZ7X4TNVHKZR9PX5A96WTBQ8"
+          ],
+          "tVideo": null
+        },
+        {
+          "n": 5,
+          "text": "Clicked \"Open chart for [REDACTED:mrn]\" on http://127.0.0.1:5178/",
+          "eventIds": [
+            "01KZ7X4TQXQTQWDVN5DE8SA8PN"
+          ],
+          "tVideo": null
+        },
+        {
+          "n": 6,
+          "text": "Clicked \"Load chart (legacy API)\" on http://127.0.0.1:5178/",
+          "eventIds": [
+            "01KZ7X4TRP4H6GBCGVE0P5C736"
+          ],
+          "tVideo": null
+        },
+        {
+          "n": 7,
+          "text": "Clicked \"Trigger the bug\" on http://127.0.0.1:5178/",
+          "eventIds": [
+            "01KZ7X4TWK8BJ8GF0QX8JNXQWN"
+          ],
+          "tVideo": null
+        },
+        {
+          "n": 8,
+          "text": "Clicked \"Go to billing\" on http://127.0.0.1:5178/",
+          "eventIds": [
+            "01KZ7X4TXBRKEV0DFAHRR6GTTY"
+          ],
+          "tVideo": null
+        },
+        {
+          "n": 9,
+          "text": "Navigated to http://127.0.0.1:5178/#/billing",
+          "eventIds": [
+            "01KZ7X4TXHA68N4FC89R2Z0T4V"
+          ],
+          "tVideo": null
+        }
+      ],
+      "expected": null,
+      "actual": null,
+      "generator": "deterministic",
+      "generatorModel": null
+    },
+    "assets": [],
+    "withheldEventCount": 1,
+    "sync": {
+      "revision": 0,
+      "lastPushedAt": null,
+      "manifestComplete": false,
+      "dirtyFields": []
+    }
+  },
+  "events": [
+    {
+      "id": "01KZ7X4TN233PAXGV8A8FZEEKZ",
+      "captureId": "01KZ7X4TM8VGM74BDT2JEYCP02",
+      "t": 25.5,
+      "kind": "interaction",
+      "payload": {
+        "type": "input",
+        "targetName": "Medical record number",
+        "targetSelector": "#mrn-field",
+        "url": "http://127.0.0.1:5178/",
+        "value": "[REDACTED:mrn]"
+      },
+      "redaction": {
+        "rulesApplied": [
+          "builtin:mrn"
+        ],
+        "fidelity": "redacted"
+      }
+    },
+    {
+      "id": "01KZ7X4TN95NRDVJEDB6M01KKX",
+      "captureId": "01KZ7X4TM8VGM74BDT2JEYCP02",
+      "t": 32.799999952316284,
+      "kind": "interaction",
+      "payload": {
+        "type": "input",
+        "targetName": "Contact email",
+        "targetSelector": "#email-field",
+        "url": "http://127.0.0.1:5178/",
+        "value": "[REDACTED:email]"
+      },
+      "redaction": {
+        "rulesApplied": [
+          "builtin:email"
+        ],
+        "fidelity": "redacted"
+      }
+    },
+    {
+      "id": "01KZ7X4TNVHKZR9PX5A96WTBQ7",
+      "captureId": "01KZ7X4TM8VGM74BDT2JEYCP02",
+      "t": 51,
+      "kind": "interaction",
+      "payload": {
+        "type": "click",
+        "targetName": "Look up patient",
+        "targetSelector": "#submit-lookup",
+        "url": "http://127.0.0.1:5178/",
+        "value": ""
+      },
+      "redaction": {
+        "rulesApplied": [],
+        "fidelity": "full"
+      }
+    },
+    {
+      "id": "01KZ7X4TNVHKZR9PX5A96WTBQ8",
+      "captureId": "01KZ7X4TM8VGM74BDT2JEYCP02",
+      "t": 51.19999998807907,
+      "kind": "interaction",
+      "payload": {
+        "type": "submit",
+        "targetName": "Patient lookup\n        \n          Medical record number\n          \n        \n        \n          Contact email\n          \n        \n        Look up patient",
+        "targetSelector": "#lookup-form",
+        "url": "http://127.0.0.1:5178/",
+        "value": null
+      },
+      "redaction": {
+        "rulesApplied": [],
+        "fidelity": "full"
+      }
+    },
+    {
+      "id": "01KZ7X4TQXQTQWDVN5DE8SA8PN",
+      "captureId": "01KZ7X4TM8VGM74BDT2JEYCP02",
+      "t": 116.69999998807907,
+      "kind": "interaction",
+      "payload": {
+        "type": "click",
+        "targetName": "Open chart for [REDACTED:mrn]",
+        "targetSelector": "#open-chart",
+        "url": "http://127.0.0.1:5178/",
+        "value": ""
+      },
+      "redaction": {
+        "rulesApplied": [
+          "builtin:mrn"
+        ],
+        "fidelity": "redacted"
+      }
+    },
+    {
+      "id": "01KZ7X4TRP4H6GBCGVE0P5C736",
+      "captureId": "01KZ7X4TM8VGM74BDT2JEYCP02",
+      "t": 141.89999997615814,
+      "kind": "interaction",
+      "payload": {
+        "type": "click",
+        "targetName": "Load chart (legacy API)",
+        "targetSelector": "[data-testid=\"load-chart-legacy\"]",
+        "url": "http://127.0.0.1:5178/",
+        "value": ""
+      },
+      "redaction": {
+        "rulesApplied": [],
+        "fidelity": "full"
+      }
+    },
+    {
+      "id": "01KZ7X4TWK8BJ8GF0QX8JNXQWN",
+      "captureId": "01KZ7X4TM8VGM74BDT2JEYCP02",
+      "t": 266.5,
+      "kind": "interaction",
+      "payload": {
+        "type": "click",
+        "targetName": "Trigger the bug",
+        "targetSelector": "[data-testid=\"crash\"]",
+        "url": "http://127.0.0.1:5178/",
+        "value": ""
+      },
+      "redaction": {
+        "rulesApplied": [],
+        "fidelity": "full"
+      }
+    },
+    {
+      "id": "01KZ7X4TWM6WRD4EEPHGETWB7Z",
+      "captureId": "01KZ7X4TM8VGM74BDT2JEYCP02",
+      "t": 267.7999999523163,
+      "kind": "console",
+      "payload": {
+        "level": "error",
+        "text": "Chart render failed for [REDACTED:mrn] ([REDACTED:email], NIK [REDACTED:nik])",
+        "stack": null
+      },
+      "redaction": {
+        "rulesApplied": [
+          "builtin:nik",
+          "builtin:mrn",
+          "builtin:email"
+        ],
+        "fidelity": "redacted"
+      }
+    },
+    {
+      "id": "01KZ7X4TWVZD5ETX7AM0D5M87Q",
+      "captureId": "01KZ7X4TM8VGM74BDT2JEYCP02",
+      "t": 274.69999998807907,
+      "kind": "console",
+      "payload": {
+        "level": "error",
+        "text": "TypeError: Cannot read properties of undefined (reading 'vitals') for [REDACTED:mrn]\n    at http://127.0.0.1:5178/:165:17",
+        "stack": "{\"callFrames\":[{\"functionName\":\"\",\"scriptId\":\"4\",\"url\":\"http://127.0.0.1:5178/\",\"lineNumber\":164,\"columnNumber\":16}]}"
+      },
+      "redaction": {
+        "rulesApplied": [
+          "builtin:mrn"
+        ],
+        "fidelity": "redacted"
+      }
+    },
+    {
+      "id": "01KZ7X4TXBRKEV0DFAHRR6GTTY",
+      "captureId": "01KZ7X4TM8VGM74BDT2JEYCP02",
+      "t": 291.0999999642372,
+      "kind": "interaction",
+      "payload": {
+        "type": "click",
+        "targetName": "Go to billing",
+        "targetSelector": "#nav-billing",
+        "url": "http://127.0.0.1:5178/",
+        "value": null
+      },
+      "redaction": {
+        "rulesApplied": [],
+        "fidelity": "full"
+      }
+    },
+    {
+      "id": "01KZ7X4TXHA68N4FC89R2Z0T4V",
+      "captureId": "01KZ7X4TM8VGM74BDT2JEYCP02",
+      "t": 296.5999999642372,
+      "kind": "navigation",
+      "payload": {
+        "from": "http://127.0.0.1:5178/",
+        "to": "http://127.0.0.1:5178/#/billing",
+        "trigger": "hashchange"
+      },
+      "redaction": {
+        "rulesApplied": [],
+        "fidelity": "full"
+      }
+    },
+    {
+      "id": "01KZ7X4TYC1DSMSP8VSJW3BHA9",
+      "captureId": "01KZ7X4TM8VGM74BDT2JEYCP02",
+      "t": 324.19999998807907,
+      "kind": "lifecycle",
+      "payload": {
+        "transition": "recording->redacting",
+        "detail": null
+      },
+      "redaction": {
+        "rulesApplied": [],
+        "fidelity": "full"
+      }
+    },
+    {
+      "id": "01KZ7X4TYC1DSMSP8VSJW3BHAA",
+      "captureId": "01KZ7X4TM8VGM74BDT2JEYCP02",
+      "t": 324.2999999523163,
+      "kind": "lifecycle",
+      "payload": {
+        "transition": "redacting->composing",
+        "detail": null
+      },
+      "redaction": {
+        "rulesApplied": [],
+        "fidelity": "full"
+      }
+    },
+    {
+      "id": "01KZ7X4TYGTQB2P6GQ3TSAERAG",
+      "captureId": "01KZ7X4TM8VGM74BDT2JEYCP02",
+      "t": 328.0999999642372,
+      "kind": "lifecycle",
+      "payload": {
+        "transition": "composing->ready",
+        "detail": null
+      },
+      "redaction": {
+        "rulesApplied": [],
+        "fidelity": "full"
+      }
+    }
+  ]
+}
