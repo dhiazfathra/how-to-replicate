@@ -72,6 +72,8 @@ jobs:
       # with real input, and asserts the resulting How to Replicate document.
       - name: End-to-end tests
         run: pnpm e2e
+        env:
+          HTR_REFRESH_EVIDENCE: '1'
 
       - name: Upload recorded evidence
         if: always()

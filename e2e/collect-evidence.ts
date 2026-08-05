@@ -10,10 +10,16 @@ const VIDEO_DIR = path.join(here, 'artifacts/videos');
  * Playwright writes each video into a per-test subdirectory of `outputDir`,
  * which is gitignored noise. Lift them out to one stable, committed folder so
  * the recorded evidence has a path that does not change between runs.
+ *
+ * Off by default: `artifacts/videos/` is committed evidence, and refreshing it
+ * on every local run leaves a dirty tree of binary churn (and used to delete
+ * the hand-built `evidence-reel.gif` outright). CI sets `HTR_REFRESH_EVIDENCE`
+ * so its uploaded artifact holds that run's recordings; a developer
+ * deliberately re-cutting the committed evidence sets it too.
  */
 export default function collectEvidence(): void {
+  if (!process.env.HTR_REFRESH_EVIDENCE) return;
   if (!fs.existsSync(RESULTS_DIR)) return;
-  fs.rmSync(VIDEO_DIR, { recursive: true, force: true });
   fs.mkdirSync(VIDEO_DIR, { recursive: true });
 
   for (const entry of fs.readdirSync(RESULTS_DIR, { withFileTypes: true })) {

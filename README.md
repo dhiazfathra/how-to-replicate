@@ -151,10 +151,14 @@ viewer reads captures from IndexedDB on its own origin.
 ## End-to-end evidence
 
 `pnpm e2e` runs four specs against a real Chromium — no jsdom, no mocked browser —
-and records a video of each. Videos land in
-[`e2e/artifacts/videos/`](e2e/artifacts/videos) and are committed, so the evidence has
-a stable path; CI re-runs the suite on every push and uploads the recordings as the
+and records a video of each. The committed recordings live in
+[`e2e/artifacts/videos/`](e2e/artifacts/videos) so the evidence has a stable path; CI
+re-runs the suite on every push and uploads that run's recordings as the
 `e2e-evidence` artifact.
+
+A local run writes its videos to the gitignored `e2e/artifacts/test-results/` and
+leaves the committed ones alone, so testing does not dirty the tree. To deliberately
+re-cut the committed evidence, run `HTR_REFRESH_EVIDENCE=1 pnpm e2e`.
 
 | Spec | What it proves |
 |---|---|
