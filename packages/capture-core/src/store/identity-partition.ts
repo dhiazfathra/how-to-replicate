@@ -128,18 +128,32 @@ export async function ensureIdentityPartition(
 }
 
 /**
- * The only entrypoint that opens a partition's store. Awaits
- * `ensureIdentityPartition` (purge-before-render, local-pointer-only, no
- * network) before opening/hydrating the new partition's database, so nothing
- * can ever read a prior identity's data via this path.
+ * Awaits `ensureIdentityPartition` (purge-before-render, local-pointer-only,
+ * no network) then opens the new partition's database. This is the only
+ * function that opens a partition db, so nothing can ever read a prior
+ * identity's data via this path. Callers that also need a `CaptureRepository`
+ * (e.g. to read events/assets, not just the observable store) should use
+ * this directly instead of `openIdentityPartition`.
+ */
+export async function openIdentityPartitionDb(
+  identity: Identity,
+  options: IdentityPartitionOptions = {},
+): Promise<IDBPDatabase<CaptureDbSchema>> {
+  await ensureIdentityPartition(identity, options);
+  const db = await openCaptureDb(partitionDbName(identity), options);
+  openPartitionHandle = db;
+  return db;
+}
+
+/**
+ * The only entrypoint that opens a partition's store. See
+ * `openIdentityPartitionDb` for the purge-before-open guarantee.
  */
 export async function openIdentityPartition(
   identity: Identity,
   options: IdentityPartitionOptions = {},
 ): Promise<CaptureStore> {
-  await ensureIdentityPartition(identity, options);
-  const db = await openCaptureDb(partitionDbName(identity), options);
-  openPartitionHandle = db;
+  const db = await openIdentityPartitionDb(identity, options);
   const store = createCaptureStore(new CaptureRepository(db));
   await store.hydrate();
   return store;
