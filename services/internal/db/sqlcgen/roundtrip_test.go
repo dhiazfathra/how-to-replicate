@@ -11,6 +11,7 @@ import (
 	"database/sql"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -208,6 +209,71 @@ func TestRoundTrip_EveryTable(t *testing.T) {
 		ID: "mut_1", CaptureID: s.captureID, Op: "set_title", Payload: []byte(`{}`), ClientT: 43,
 	}); err == nil {
 		t.Fatal("expected duplicate mutation id to fail insert")
+	}
+
+	// InsertMutationIfNew (Task 4): first insert succeeds, replay is a
+	// silent no-op (ErrNoRows from the ON CONFLICT DO NOTHING), not an
+	// error — the idempotency contract sync-gateway depends on.
+	if _, err := q.InsertMutationIfNew(ctx, InsertMutationIfNewParams{
+		ID: "mut_idem", CaptureID: s.captureID, Op: "set_title", Payload: []byte(`{"title":"x"}`), ClientT: 1,
+	}); err != nil {
+		t.Fatalf("InsertMutationIfNew: %v", err)
+	}
+	if _, err := q.InsertMutationIfNew(ctx, InsertMutationIfNewParams{
+		ID: "mut_idem", CaptureID: s.captureID, Op: "set_title", Payload: []byte(`{"title":"y"}`), ClientT: 2,
+	}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("InsertMutationIfNew replay: want ErrNoRows, got %v", err)
+	}
+
+	// LockCaptureForWorkspace (Task 4): matches by (id, workspace_id)
+	// together — wrong workspace looks identical to no such capture.
+	if got, err := q.LockCaptureForWorkspace(ctx, LockCaptureForWorkspaceParams{
+		ID: s.captureID, WorkspaceID: s.workspaceID,
+	}); err != nil || got.ID != s.captureID {
+		t.Fatalf("LockCaptureForWorkspace: %v, %+v", err, got)
+	}
+	if _, err := q.LockCaptureForWorkspace(ctx, LockCaptureForWorkspaceParams{
+		ID: s.captureID, WorkspaceID: "some_other_workspace",
+	}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("LockCaptureForWorkspace wrong workspace: want ErrNoRows, got %v", err)
+	}
+
+	// UpdateCaptureRevisionAndDoc (Task 4): revision and doc both persist.
+	updated, err := q.UpdateCaptureRevisionAndDoc(ctx, UpdateCaptureRevisionAndDocParams{
+		ID: s.captureID, Revision: 1, Doc: []byte(`{"title":"x"}`),
+	})
+	if err != nil || updated.Revision != 1 {
+		t.Fatalf("UpdateCaptureRevisionAndDoc: %v, %+v", err, updated)
+	}
+
+	// GetCaptureFieldVersion / UpsertCaptureFieldVersion (Task 4): no
+	// version until the first upsert; a second upsert on the same
+	// (capture, field) overwrites in place rather than erroring.
+	if _, err := q.GetCaptureFieldVersion(ctx, GetCaptureFieldVersionParams{
+		CaptureID: s.captureID, Field: "title",
+	}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("GetCaptureFieldVersion before any write: want ErrNoRows, got %v", err)
+	}
+	fv, err := q.UpsertCaptureFieldVersion(ctx, UpsertCaptureFieldVersionParams{
+		CaptureID: s.captureID, Field: "title",
+		ServerT: pgtype.Timestamptz{Time: time.Unix(1000, 0), Valid: true},
+		Revision: 1, MutationID: "mut_idem",
+	})
+	if err != nil || fv.MutationID != "mut_idem" {
+		t.Fatalf("UpsertCaptureFieldVersion (insert): %v, %+v", err, fv)
+	}
+	fv, err = q.UpsertCaptureFieldVersion(ctx, UpsertCaptureFieldVersionParams{
+		CaptureID: s.captureID, Field: "title",
+		ServerT: pgtype.Timestamptz{Time: time.Unix(2000, 0), Valid: true},
+		Revision: 2, MutationID: "mut_1",
+	})
+	if err != nil || fv.MutationID != "mut_1" || fv.Revision != 2 {
+		t.Fatalf("UpsertCaptureFieldVersion (update): %v, %+v", err, fv)
+	}
+	if got, err := q.GetCaptureFieldVersion(ctx, GetCaptureFieldVersionParams{
+		CaptureID: s.captureID, Field: "title",
+	}); err != nil || got.MutationID != "mut_1" {
+		t.Fatalf("GetCaptureFieldVersion after upsert: %v, %+v", err, got)
 	}
 
 	comment, err := q.CreateComment(ctx, CreateCommentParams{

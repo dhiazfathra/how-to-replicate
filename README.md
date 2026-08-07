@@ -87,6 +87,7 @@ cli/                  agent-facing CLI (Phase 2 — not built)
 proto/                Buf module — API schema, generated Go checked in under proto/gen
 services/             Go workspace (Phase 1+)
   internal/           shared packages: db, migrate, otel, httpx, storage, authz, testsupport
+  sync-gateway/       mutation intake, revisions, last-write-wins (Task 4)
 docs/
   decisions/          ADRs
   superpowers/specs/  design specs
@@ -160,7 +161,8 @@ The wire contract is `proto/sync/v1/sync.proto` (the closed `Mutation` oneof —
 `proto/capture/v1/capture.proto` (`CaptureService`, the read surface). Both compile to
 type-safe Go via `sqlc` (`services/sqlc.yaml` → `services/internal/db/sqlcgen`) and
 buf/connect-go (`proto/buf.gen.yaml` → `proto/gen/go`). This task delivers schema,
-protos, and generated code only — no service wires them up yet (Tasks 4+).
+protos, and generated code only; `sync-gateway` (Task 4, below) is the first service
+to wire them up.
 
 ```bash
 go work sync                       # sync go.work with each module's go.mod
@@ -189,6 +191,57 @@ buf generate    # regenerates checked-in Go under proto/gen — CI fails on drif
 `services/internal/db/queries`, run `sqlc generate` from `services/` to produce
 type-safe Go under `services/internal/db/sqlcgen`. Migrations are plain SQL run via
 `goose` (`services/internal/migrate`), embedded at build time.
+
+### sync-gateway (Task 4)
+
+`services/sync-gateway/` is the first service to actually wire the schema and protos
+from Task 3 into a running RPC surface. It implements `SyncService.PushMutations`:
+batched, idempotent mutation intake with server-owned revision numbering and
+per-field last-write-wins conflict resolution (spec §10, ADR-012). `PullDeltas`,
+`RequestAssetUpload`, and `CompleteAssetUpload` return `Unimplemented` — they belong
+to Tasks 5 and 6.
+
+- **Idempotency** is a plain `INSERT ... ON CONFLICT (id) DO NOTHING` on the
+  mutation's client-minted ULID primary key (`InsertMutationIfNew` in
+  `services/internal/db/queries/queries.sql`), not an application cache. A replayed
+  batch changes nothing and returns the same per-mutation results.
+- **Revisions** are assigned inside a `SELECT ... FOR UPDATE` on the capture row
+  (`LockCaptureForWorkspace`), so concurrent pushes to the same capture serialize
+  instead of racing on the increment.
+- **Conflict resolution** is per field, ordered by `(server-received timestamp,
+  revision, mutation ID)` — see `wins()` in `internal/gateway/gateway.go`. A new
+  table, `capture_field_versions` (migration `00003_field_versions.sql`), holds the
+  winning tuple per `(capture, field)`; it's mutated in place (unlike the append-only
+  tables), so it gets full CRUD for `htr_runtime`. A losing mutation is still
+  accepted (recorded, revision advances) but its field write is skipped and audited
+  to `audit_log` — ADR-012's "the loser's value is recorded in the audit log so a
+  surprised user can find out what happened."
+- **Rejection** is typed: `internal/gateway.Reason` (`not_found`,
+  `invalid_mutation`) rides in `PushMutationsResult.error`, never a bare/generic
+  string. A mutation naming a capture outside the caller's workspace gets the exact
+  same `not_found` reason as a mutation naming a capture that doesn't exist — the
+  response never discloses which one happened.
+- **Auth seam**: `internal/authctx` reads a workspace ID, user ID, and role from
+  request headers (`X-Htr-Workspace-Id`, `X-Htr-User-Id`, `X-Htr-Role`) into context.
+  This is a deliberate placeholder for Task 10's real identity — every downstream
+  check is already real and tested: workspace scoping against
+  `authctx.WorkspaceID(ctx)`, and the RPC-level permission check against
+  `services/internal/authz.Can(role, PermissionCaptureWrite)`. Only the thing that
+  populates the context changes when Task 10 lands.
+
+Business logic (`internal/gateway`) is unit-tested against an in-memory `Store` fake
+with no database; `internal/gateway/pgstore.go` (the production `Store`, wrapping
+`sqlcgen.Queries`) is proven against a real migrated Postgres testcontainer in
+`pgstore_integration_test.go`, skipping cleanly with no Docker daemon.
+
+```bash
+cd services/sync-gateway
+go build ./...
+go test ./...                       # unit tests always run; pgstore's integration
+                                     # test additionally needs Docker (testcontainers)
+HTR_POSTGRES_DSN=postgres://... HTR_RUNTIME_PASSWORD=htr_runtime \
+  go run ./cmd/sync-gateway          # listens on :8081 by default (HTR_LISTEN_ADDR)
+```
 
 ## Running the extension
 

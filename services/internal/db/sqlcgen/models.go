@@ -59,6 +59,14 @@ type CaptureEvent struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
+type CaptureFieldVersion struct {
+	CaptureID  string             `json:"capture_id"`
+	Field      string             `json:"field"`
+	ServerT    pgtype.Timestamptz `json:"server_t"`
+	Revision   int64              `json:"revision"`
+	MutationID string             `json:"mutation_id"`
+}
+
 type Comment struct {
 	ID        string             `json:"id"`
 	CaptureID string             `json:"capture_id"`

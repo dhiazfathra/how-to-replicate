@@ -544,6 +544,28 @@ func (q *Queries) GetCaptureEvent(ctx context.Context, id string) (CaptureEvent,
 	return i, err
 }
 
+const getCaptureFieldVersion = `-- name: GetCaptureFieldVersion :one
+SELECT capture_id, field, server_t, revision, mutation_id FROM capture_field_versions WHERE capture_id = $1 AND field = $2
+`
+
+type GetCaptureFieldVersionParams struct {
+	CaptureID string `json:"capture_id"`
+	Field     string `json:"field"`
+}
+
+func (q *Queries) GetCaptureFieldVersion(ctx context.Context, arg GetCaptureFieldVersionParams) (CaptureFieldVersion, error) {
+	row := q.db.QueryRow(ctx, getCaptureFieldVersion, arg.CaptureID, arg.Field)
+	var i CaptureFieldVersion
+	err := row.Scan(
+		&i.CaptureID,
+		&i.Field,
+		&i.ServerT,
+		&i.Revision,
+		&i.MutationID,
+	)
+	return i, err
+}
+
 const getComment = `-- name: GetComment :one
 SELECT id, capture_id, author_id, body, created_at FROM comments WHERE id = $1
 `
@@ -708,6 +730,47 @@ func (q *Queries) GetWorkspace(ctx context.Context, id string) (Workspace, error
 	return i, err
 }
 
+const insertMutationIfNew = `-- name: InsertMutationIfNew :one
+INSERT INTO mutations (id, capture_id, op, payload, client_t)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (id) DO NOTHING
+RETURNING id, capture_id, op, payload, client_t, created_at
+`
+
+type InsertMutationIfNewParams struct {
+	ID        string `json:"id"`
+	CaptureID string `json:"capture_id"`
+	Op        string `json:"op"`
+	Payload   []byte `json:"payload"`
+	ClientT   int64  `json:"client_t"`
+}
+
+// Idempotent variant of CreateMutation used by sync-gateway: ON CONFLICT DO
+// NOTHING never updates the row (mutations stays append-only, same
+// reasoning as CreateMutation above), it just makes a duplicate insert a
+// no-op instead of a unique-violation error. sqlc's :one returns
+// pgx.ErrNoRows when the conflict fires with nothing to return, which
+// callers read as "already applied, do not reprocess".
+func (q *Queries) InsertMutationIfNew(ctx context.Context, arg InsertMutationIfNewParams) (Mutation, error) {
+	row := q.db.QueryRow(ctx, insertMutationIfNew,
+		arg.ID,
+		arg.CaptureID,
+		arg.Op,
+		arg.Payload,
+		arg.ClientT,
+	)
+	var i Mutation
+	err := row.Scan(
+		&i.ID,
+		&i.CaptureID,
+		&i.Op,
+		&i.Payload,
+		&i.ClientT,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const listCaptureEventsByCapture = `-- name: ListCaptureEventsByCapture :many
 SELECT id, capture_id, t, kind, payload, redaction, created_at FROM capture_events WHERE capture_id = $1 ORDER BY t ASC
 `
@@ -740,6 +803,44 @@ func (q *Queries) ListCaptureEventsByCapture(ctx context.Context, captureID stri
 	return items, nil
 }
 
+const lockCaptureForWorkspace = `-- name: LockCaptureForWorkspace :one
+SELECT id, workspace_id, project_id, source, state, fidelity, created_at, epoch, env, metadata, doc, withheld_event_count, revision, manifest_complete, applied_ruleset_version FROM captures WHERE id = $1 AND workspace_id = $2 FOR UPDATE
+`
+
+type LockCaptureForWorkspaceParams struct {
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
+}
+
+// Workspace and existence are checked in one predicate so a mutation
+// naming a capture outside the caller's workspace fails the same way as a
+// mutation naming a capture that doesn't exist at all — the caller cannot
+// tell the two cases apart, which is the point (no existence leak across
+// workspaces). FOR UPDATE serializes concurrent revision increments on the
+// same capture.
+func (q *Queries) LockCaptureForWorkspace(ctx context.Context, arg LockCaptureForWorkspaceParams) (Capture, error) {
+	row := q.db.QueryRow(ctx, lockCaptureForWorkspace, arg.ID, arg.WorkspaceID)
+	var i Capture
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.Source,
+		&i.State,
+		&i.Fidelity,
+		&i.CreatedAt,
+		&i.Epoch,
+		&i.Env,
+		&i.Metadata,
+		&i.Doc,
+		&i.WithheldEventCount,
+		&i.Revision,
+		&i.ManifestComplete,
+		&i.AppliedRulesetVersion,
+	)
+	return i, err
+}
+
 const revokeShareLink = `-- name: RevokeShareLink :one
 UPDATE share_links SET revoked_at = now() WHERE id = $1 RETURNING id, capture_id, token, created_by, revoked_at, expires_at, created_at
 `
@@ -755,6 +856,74 @@ func (q *Queries) RevokeShareLink(ctx context.Context, id string) (ShareLink, er
 		&i.RevokedAt,
 		&i.ExpiresAt,
 		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const updateCaptureRevisionAndDoc = `-- name: UpdateCaptureRevisionAndDoc :one
+UPDATE captures SET revision = $2, doc = $3 WHERE id = $1 RETURNING id, workspace_id, project_id, source, state, fidelity, created_at, epoch, env, metadata, doc, withheld_event_count, revision, manifest_complete, applied_ruleset_version
+`
+
+type UpdateCaptureRevisionAndDocParams struct {
+	ID       string `json:"id"`
+	Revision int64  `json:"revision"`
+	Doc      []byte `json:"doc"`
+}
+
+func (q *Queries) UpdateCaptureRevisionAndDoc(ctx context.Context, arg UpdateCaptureRevisionAndDocParams) (Capture, error) {
+	row := q.db.QueryRow(ctx, updateCaptureRevisionAndDoc, arg.ID, arg.Revision, arg.Doc)
+	var i Capture
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.Source,
+		&i.State,
+		&i.Fidelity,
+		&i.CreatedAt,
+		&i.Epoch,
+		&i.Env,
+		&i.Metadata,
+		&i.Doc,
+		&i.WithheldEventCount,
+		&i.Revision,
+		&i.ManifestComplete,
+		&i.AppliedRulesetVersion,
+	)
+	return i, err
+}
+
+const upsertCaptureFieldVersion = `-- name: UpsertCaptureFieldVersion :one
+INSERT INTO capture_field_versions (capture_id, field, server_t, revision, mutation_id)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (capture_id, field) DO UPDATE
+    SET server_t = EXCLUDED.server_t, revision = EXCLUDED.revision, mutation_id = EXCLUDED.mutation_id
+RETURNING capture_id, field, server_t, revision, mutation_id
+`
+
+type UpsertCaptureFieldVersionParams struct {
+	CaptureID  string             `json:"capture_id"`
+	Field      string             `json:"field"`
+	ServerT    pgtype.Timestamptz `json:"server_t"`
+	Revision   int64              `json:"revision"`
+	MutationID string             `json:"mutation_id"`
+}
+
+func (q *Queries) UpsertCaptureFieldVersion(ctx context.Context, arg UpsertCaptureFieldVersionParams) (CaptureFieldVersion, error) {
+	row := q.db.QueryRow(ctx, upsertCaptureFieldVersion,
+		arg.CaptureID,
+		arg.Field,
+		arg.ServerT,
+		arg.Revision,
+		arg.MutationID,
+	)
+	var i CaptureFieldVersion
+	err := row.Scan(
+		&i.CaptureID,
+		&i.Field,
+		&i.ServerT,
+		&i.Revision,
+		&i.MutationID,
 	)
 	return i, err
 }

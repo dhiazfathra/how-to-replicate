@@ -67,8 +67,42 @@ SELECT * FROM assets WHERE id = $1;
 INSERT INTO mutations (id, capture_id, op, payload, client_t)
 VALUES ($1, $2, $3, $4, $5) RETURNING *;
 
+-- name: InsertMutationIfNew :one
+-- Idempotent variant of CreateMutation used by sync-gateway: ON CONFLICT DO
+-- NOTHING never updates the row (mutations stays append-only, same
+-- reasoning as CreateMutation above), it just makes a duplicate insert a
+-- no-op instead of a unique-violation error. sqlc's :one returns
+-- pgx.ErrNoRows when the conflict fires with nothing to return, which
+-- callers read as "already applied, do not reprocess".
+INSERT INTO mutations (id, capture_id, op, payload, client_t)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (id) DO NOTHING
+RETURNING *;
+
 -- name: GetMutation :one
 SELECT * FROM mutations WHERE id = $1;
+
+-- name: LockCaptureForWorkspace :one
+-- Workspace and existence are checked in one predicate so a mutation
+-- naming a capture outside the caller's workspace fails the same way as a
+-- mutation naming a capture that doesn't exist at all — the caller cannot
+-- tell the two cases apart, which is the point (no existence leak across
+-- workspaces). FOR UPDATE serializes concurrent revision increments on the
+-- same capture.
+SELECT * FROM captures WHERE id = $1 AND workspace_id = $2 FOR UPDATE;
+
+-- name: UpdateCaptureRevisionAndDoc :one
+UPDATE captures SET revision = $2, doc = $3 WHERE id = $1 RETURNING *;
+
+-- name: GetCaptureFieldVersion :one
+SELECT * FROM capture_field_versions WHERE capture_id = $1 AND field = $2;
+
+-- name: UpsertCaptureFieldVersion :one
+INSERT INTO capture_field_versions (capture_id, field, server_t, revision, mutation_id)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (capture_id, field) DO UPDATE
+    SET server_t = EXCLUDED.server_t, revision = EXCLUDED.revision, mutation_id = EXCLUDED.mutation_id
+RETURNING *;
 
 -- name: CreateComment :one
 INSERT INTO comments (id, capture_id, author_id, body) VALUES ($1, $2, $3, $4) RETURNING *;

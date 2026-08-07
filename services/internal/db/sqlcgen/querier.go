@@ -33,6 +33,7 @@ type Querier interface {
 	GetAuditLog(ctx context.Context, id string) (AuditLog, error)
 	GetCapture(ctx context.Context, id string) (Capture, error)
 	GetCaptureEvent(ctx context.Context, id string) (CaptureEvent, error)
+	GetCaptureFieldVersion(ctx context.Context, arg GetCaptureFieldVersionParams) (CaptureFieldVersion, error)
 	GetComment(ctx context.Context, id string) (Comment, error)
 	GetIntegrationBinding(ctx context.Context, id string) (IntegrationBinding, error)
 	GetMembership(ctx context.Context, id string) (Membership, error)
@@ -43,8 +44,24 @@ type Querier interface {
 	GetShareLink(ctx context.Context, id string) (ShareLink, error)
 	GetUser(ctx context.Context, id string) (User, error)
 	GetWorkspace(ctx context.Context, id string) (Workspace, error)
+	// Idempotent variant of CreateMutation used by sync-gateway: ON CONFLICT DO
+	// NOTHING never updates the row (mutations stays append-only, same
+	// reasoning as CreateMutation above), it just makes a duplicate insert a
+	// no-op instead of a unique-violation error. sqlc's :one returns
+	// pgx.ErrNoRows when the conflict fires with nothing to return, which
+	// callers read as "already applied, do not reprocess".
+	InsertMutationIfNew(ctx context.Context, arg InsertMutationIfNewParams) (Mutation, error)
 	ListCaptureEventsByCapture(ctx context.Context, captureID string) ([]CaptureEvent, error)
+	// Workspace and existence are checked in one predicate so a mutation
+	// naming a capture outside the caller's workspace fails the same way as a
+	// mutation naming a capture that doesn't exist at all — the caller cannot
+	// tell the two cases apart, which is the point (no existence leak across
+	// workspaces). FOR UPDATE serializes concurrent revision increments on the
+	// same capture.
+	LockCaptureForWorkspace(ctx context.Context, arg LockCaptureForWorkspaceParams) (Capture, error)
 	RevokeShareLink(ctx context.Context, id string) (ShareLink, error)
+	UpdateCaptureRevisionAndDoc(ctx context.Context, arg UpdateCaptureRevisionAndDocParams) (Capture, error)
+	UpsertCaptureFieldVersion(ctx context.Context, arg UpsertCaptureFieldVersionParams) (CaptureFieldVersion, error)
 }
 
 var _ Querier = (*Queries)(nil)

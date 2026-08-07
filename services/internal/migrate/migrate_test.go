@@ -32,7 +32,7 @@ func TestUpAndStatus(t *testing.T) {
 	// this assertion is updated each time a migration is added rather than
 	// pinned, since pinning it is exactly the kind of test that breaks for
 	// the right reason on every future schema change.
-	const wantVersion = 2
+	const wantVersion = 3
 	if version != wantVersion {
 		t.Fatalf("expected version %d, got %d", wantVersion, version)
 	}
