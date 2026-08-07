@@ -12,10 +12,14 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/minio/minio-go/v7"
+	"github.com/minio/minio-go/v7/pkg/credentials"
+
 	"github.com/dhiazfathra/how-to-replicate/proto/gen/go/sync/v1/syncv1connect"
 	"github.com/dhiazfathra/how-to-replicate/services/internal/db"
 	"github.com/dhiazfathra/how-to-replicate/services/internal/httpx"
 	htrotel "github.com/dhiazfathra/how-to-replicate/services/internal/otel"
+	"github.com/dhiazfathra/how-to-replicate/services/internal/storage"
 	"github.com/dhiazfathra/how-to-replicate/services/sync-gateway/internal/authctx"
 	"github.com/dhiazfathra/how-to-replicate/services/sync-gateway/internal/gateway"
 	"github.com/dhiazfathra/how-to-replicate/services/sync-gateway/internal/handler"
@@ -53,7 +57,12 @@ func run() error {
 	}
 	defer func() { _ = providers.Shutdown(context.Background()) }()
 
-	gw := &gateway.Gateway{WithinTx: gateway.NewTxRunner(pool)}
+	objectStore, err := newObjectStore(ctx)
+	if err != nil {
+		return err
+	}
+
+	gw := &gateway.Gateway{WithinTx: gateway.NewTxRunner(pool), Storage: objectStore}
 	svc := &handler.SyncService{Gateway: gw}
 
 	router := httpx.NewRouter(serviceName, slog.Default())
@@ -76,4 +85,33 @@ func run() error {
 		return err
 	}
 	return nil
+}
+
+// newObjectStore wires the asset-upload object store against ADR-011's
+// self-hosted, S3-compatible Nutanix endpoint, hardening the bucket
+// (encryption on, no public policy) before returning.
+func newObjectStore(ctx context.Context) (gateway.ObjectStore, error) {
+	endpoint := os.Getenv("HTR_S3_ENDPOINT")
+	accessKey := os.Getenv("HTR_S3_ACCESS_KEY")
+	secretKey := os.Getenv("HTR_S3_SECRET_KEY")
+	bucket := os.Getenv("HTR_S3_BUCKET")
+	useSSL := os.Getenv("HTR_S3_USE_SSL") != "false"
+
+	mc, err := minio.New(endpoint, &minio.Options{
+		Creds:  credentials.NewStaticV4(accessKey, secretKey, ""),
+		Secure: useSSL,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	client, err := storage.New(mc, bucket)
+	if err != nil {
+		return nil, err
+	}
+	if err := client.EnsureHardenedBucket(ctx); err != nil {
+		return nil, err
+	}
+
+	return gateway.NewObjectStore(client), nil
 }

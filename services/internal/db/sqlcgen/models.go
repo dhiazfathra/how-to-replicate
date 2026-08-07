@@ -21,6 +21,17 @@ type Asset struct {
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
+type AssetUploadPresign struct {
+	ID             string             `json:"id"`
+	AssetID        string             `json:"asset_id"`
+	ObjectKey      string             `json:"object_key"`
+	ChecksumSha256 string             `json:"checksum_sha256"`
+	SizeBytes      int64              `json:"size_bytes"`
+	ExpiresAt      pgtype.Timestamptz `json:"expires_at"`
+	ConsumedAt     pgtype.Timestamptz `json:"consumed_at"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
 type AuditLog struct {
 	ID          string             `json:"id"`
 	WorkspaceID string             `json:"workspace_id"`

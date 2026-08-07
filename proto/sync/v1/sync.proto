@@ -74,11 +74,17 @@ message RequestAssetUploadRequest {
   string asset_id = 2; // client-minted ULID
   string mime_type = 3;
   int64 size_bytes = 4;
+  string sha256 = 5; // client-declared checksum, bound into the presign
 }
 
+// RequestAssetUploadResponse carries the headers the client MUST send on its
+// PUT for the presign's checksum binding and single-use conditional write to
+// take effect. The client never chooses upload_url's object key.
 message RequestAssetUploadResponse {
   string upload_url = 1;
   string object_key = 2;
+  map<string, string> required_headers = 3;
+  int64 expires_at_unix_ms = 4;
 }
 
 message CompleteAssetUploadRequest {
@@ -89,6 +95,8 @@ message CompleteAssetUploadRequest {
 
 message CompleteAssetUploadResponse {
   bool verified = 1;
+  bool manifest_complete = 2;
+  string error = 3; // typed rejection code, empty on success
 }
 
 // SyncService is the client-facing sync surface: push local mutations,

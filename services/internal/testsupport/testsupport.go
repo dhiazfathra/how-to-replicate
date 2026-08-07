@@ -93,9 +93,17 @@ func MinIO(t *testing.T, ctx context.Context) MinIOCreds {
 	const accessKey = "htr-test"
 	const secretKey = "htr-test-secret"
 
+	// kmsKey is a static single-key KMS, so SetBucketEncryption(SSE-S3) works
+	// against this container the same way it would against a real
+	// deployment's KMS (ADR-011) — MinIO refuses SSE-S3 with no KMS
+	// configured at all. It is a fixed, non-secret 32-byte key: throwaway
+	// container only, never a real deployment's key.
+	const kmsKey = "htr-test-key:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" //nolint:gosec // not a credential, see comment above
+
 	container, err := minio.Run(ctx, "minio/minio:RELEASE.2024-10-13T13-34-11Z",
 		minio.WithUsername(accessKey),
 		minio.WithPassword(secretKey),
+		testcontainers.WithEnv(map[string]string{"MINIO_KMS_SECRET_KEY": kmsKey}),
 	)
 	if err != nil {
 		t.Fatalf("testsupport: start minio container: %v", err)

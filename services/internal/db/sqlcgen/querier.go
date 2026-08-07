@@ -9,7 +9,14 @@ import (
 )
 
 type Querier interface {
+	// Flips consumed_at exactly once. ON conflict with an already-consumed row
+	// the WHERE clause excludes it, so sqlc's :one returns pgx.ErrNoRows —
+	// callers read that as "already consumed, refuse" without a second query.
+	ConsumeAssetUploadPresign(ctx context.Context, objectKey string) (AssetUploadPresign, error)
+	CountAssetsForCapture(ctx context.Context, captureID string) (int64, error)
+	CountUnverifiedAssetsForCapture(ctx context.Context, captureID string) (int64, error)
 	CreateAsset(ctx context.Context, arg CreateAssetParams) (Asset, error)
+	CreateAssetUploadPresign(ctx context.Context, arg CreateAssetUploadPresignParams) (AssetUploadPresign, error)
 	CreateAuditLog(ctx context.Context, arg CreateAuditLogParams) (AuditLog, error)
 	CreateCapture(ctx context.Context, arg CreateCaptureParams) (Capture, error)
 	CreateCaptureEvent(ctx context.Context, arg CreateCaptureEventParams) (CaptureEvent, error)
@@ -30,6 +37,11 @@ type Querier interface {
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
 	CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams) (Workspace, error)
 	GetAsset(ctx context.Context, id string) (Asset, error)
+	// Same no-existence-leak shape as LockCaptureForWorkspace: an asset id that
+	// belongs to a capture outside the caller's workspace, or doesn't exist at
+	// all, is indistinguishable pgx.ErrNoRows to the caller.
+	GetAssetForWorkspace(ctx context.Context, arg GetAssetForWorkspaceParams) (Asset, error)
+	GetAssetUploadPresignByKey(ctx context.Context, objectKey string) (AssetUploadPresign, error)
 	GetAuditLog(ctx context.Context, id string) (AuditLog, error)
 	GetCapture(ctx context.Context, id string) (Capture, error)
 	GetCaptureEvent(ctx context.Context, id string) (CaptureEvent, error)
@@ -59,8 +71,17 @@ type Querier interface {
 	// workspaces). FOR UPDATE serializes concurrent revision increments on the
 	// same capture.
 	LockCaptureForWorkspace(ctx context.Context, arg LockCaptureForWorkspaceParams) (Capture, error)
+	MarkAssetVerified(ctx context.Context, arg MarkAssetVerifiedParams) (Asset, error)
 	RevokeShareLink(ctx context.Context, id string) (ShareLink, error)
+	SetCaptureManifestComplete(ctx context.Context, arg SetCaptureManifestCompleteParams) (Capture, error)
 	UpdateCaptureRevisionAndDoc(ctx context.Context, arg UpdateCaptureRevisionAndDocParams) (Capture, error)
+	// Creates the manifest entry (ADR-012: "the manifest entry for each asset
+	// carries the expected size and content hash before the PUT is issued") on
+	// first request, or repoints object_key at a freshly minted key on
+	// re-request. sha256/size_bytes/verified_at are deliberately left untouched
+	// here — they only ever change via MarkAssetVerified, so a re-request can
+	// never itself flip a verified asset back to unverified.
+	UpsertAssetForUpload(ctx context.Context, arg UpsertAssetForUploadParams) (Asset, error)
 	UpsertCaptureFieldVersion(ctx context.Context, arg UpsertCaptureFieldVersionParams) (CaptureFieldVersion, error)
 }
 

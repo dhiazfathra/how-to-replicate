@@ -57,4 +57,66 @@ type Store interface {
 	// RecordSupersededMutation audits a field write that lost the LWW race
 	// (ADR-012: "the loser's value is recorded in the audit log").
 	RecordSupersededMutation(ctx context.Context, workspaceID, captureID, mutationID, field string) error
+
+	// GetAssetForWorkspace returns the asset row, or found=false if no asset
+	// with that ID exists on that capture in that workspace — same
+	// no-existence-leak shape as LockCaptureForWorkspace.
+	GetAssetForWorkspace(ctx context.Context, assetID, captureID, workspaceID string) (asset Asset, found bool, err error)
+
+	// UpsertAssetForUpload creates the manifest entry on first request, or
+	// repoints its object_key at a freshly minted key on re-request, without
+	// touching sha256/size_bytes/verified_at.
+	UpsertAssetForUpload(ctx context.Context, asset Asset) (Asset, error)
+
+	// CreateAssetUploadPresign records one presign issuance.
+	CreateAssetUploadPresign(ctx context.Context, p AssetUploadPresign) error
+
+	// GetAssetUploadPresignByKey returns the presign issuance for objectKey,
+	// or found=false if none exists.
+	GetAssetUploadPresignByKey(ctx context.Context, objectKey string) (p AssetUploadPresign, found bool, err error)
+
+	// ConsumeAssetUploadPresign marks objectKey's presign consumed and
+	// reports ok=true only if this call is the one that consumed it — a
+	// second call (replay, or a presign never issued) reports ok=false and
+	// must not be treated as verification succeeding again.
+	ConsumeAssetUploadPresign(ctx context.Context, objectKey string) (ok bool, err error)
+
+	// MarkAssetVerified stamps an asset verified with the hash/size the
+	// server itself observed.
+	MarkAssetVerified(ctx context.Context, assetID, sha256Hex string, sizeBytes int64) error
+
+	// ManifestComplete reports whether every asset on captureID is verified.
+	// A capture with zero assets is not complete — there is nothing to be
+	// complete about yet.
+	ManifestComplete(ctx context.Context, captureID string) (bool, error)
+
+	// SetCaptureManifestComplete persists the capture's manifest_complete
+	// flag — the field client eviction reads (invariant 8), never
+	// lastPushedAt.
+	SetCaptureManifestComplete(ctx context.Context, captureID string, complete bool) error
+}
+
+// Asset is the subset of an assets row the gateway needs to issue and
+// verify uploads.
+type Asset struct {
+	ID         string
+	CaptureID  string
+	Kind       string
+	MimeType   string
+	SizeBytes  int64
+	ObjectKey  string
+	Sha256     string
+	VerifiedAt time.Time
+	Verified   bool
+}
+
+// AssetUploadPresign is one presign issuance: the declared size/checksum
+// bound at RequestAssetUpload time, and its expiry and consumption state.
+type AssetUploadPresign struct {
+	ID             string
+	AssetID        string
+	ObjectKey      string
+	ChecksumSHA256 string
+	SizeBytes      int64
+	ExpiresAt      time.Time
 }

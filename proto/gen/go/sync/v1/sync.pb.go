@@ -677,6 +677,7 @@ type RequestAssetUploadRequest struct {
 	AssetId       string                 `protobuf:"bytes,2,opt,name=asset_id,json=assetId,proto3" json:"asset_id,omitempty"` // client-minted ULID
 	MimeType      string                 `protobuf:"bytes,3,opt,name=mime_type,json=mimeType,proto3" json:"mime_type,omitempty"`
 	SizeBytes     int64                  `protobuf:"varint,4,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
+	Sha256        string                 `protobuf:"bytes,5,opt,name=sha256,proto3" json:"sha256,omitempty"` // client-declared checksum, bound into the presign
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -739,12 +740,24 @@ func (x *RequestAssetUploadRequest) GetSizeBytes() int64 {
 	return 0
 }
 
+func (x *RequestAssetUploadRequest) GetSha256() string {
+	if x != nil {
+		return x.Sha256
+	}
+	return ""
+}
+
+// RequestAssetUploadResponse carries the headers the client MUST send on its
+// PUT for the presign's checksum binding and single-use conditional write to
+// take effect. The client never chooses upload_url's object key.
 type RequestAssetUploadResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	UploadUrl     string                 `protobuf:"bytes,1,opt,name=upload_url,json=uploadUrl,proto3" json:"upload_url,omitempty"`
-	ObjectKey     string                 `protobuf:"bytes,2,opt,name=object_key,json=objectKey,proto3" json:"object_key,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	UploadUrl       string                 `protobuf:"bytes,1,opt,name=upload_url,json=uploadUrl,proto3" json:"upload_url,omitempty"`
+	ObjectKey       string                 `protobuf:"bytes,2,opt,name=object_key,json=objectKey,proto3" json:"object_key,omitempty"`
+	RequiredHeaders map[string]string      `protobuf:"bytes,3,rep,name=required_headers,json=requiredHeaders,proto3" json:"required_headers,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	ExpiresAtUnixMs int64                  `protobuf:"varint,4,opt,name=expires_at_unix_ms,json=expiresAtUnixMs,proto3" json:"expires_at_unix_ms,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *RequestAssetUploadResponse) Reset() {
@@ -789,6 +802,20 @@ func (x *RequestAssetUploadResponse) GetObjectKey() string {
 		return x.ObjectKey
 	}
 	return ""
+}
+
+func (x *RequestAssetUploadResponse) GetRequiredHeaders() map[string]string {
+	if x != nil {
+		return x.RequiredHeaders
+	}
+	return nil
+}
+
+func (x *RequestAssetUploadResponse) GetExpiresAtUnixMs() int64 {
+	if x != nil {
+		return x.ExpiresAtUnixMs
+	}
+	return 0
 }
 
 type CompleteAssetUploadRequest struct {
@@ -852,10 +879,12 @@ func (x *CompleteAssetUploadRequest) GetSha256() string {
 }
 
 type CompleteAssetUploadResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Verified      bool                   `protobuf:"varint,1,opt,name=verified,proto3" json:"verified,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	Verified         bool                   `protobuf:"varint,1,opt,name=verified,proto3" json:"verified,omitempty"`
+	ManifestComplete bool                   `protobuf:"varint,2,opt,name=manifest_complete,json=manifestComplete,proto3" json:"manifest_complete,omitempty"`
+	Error            string                 `protobuf:"bytes,3,opt,name=error,proto3" json:"error,omitempty"` // typed rejection code, empty on success
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *CompleteAssetUploadResponse) Reset() {
@@ -893,6 +922,20 @@ func (x *CompleteAssetUploadResponse) GetVerified() bool {
 		return x.Verified
 	}
 	return false
+}
+
+func (x *CompleteAssetUploadResponse) GetManifestComplete() bool {
+	if x != nil {
+		return x.ManifestComplete
+	}
+	return false
+}
+
+func (x *CompleteAssetUploadResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
 }
 
 var File_sync_v1_sync_proto protoreflect.FileDescriptor
@@ -941,26 +984,34 @@ const file_sync_v1_sync_proto_rawDesc = "" +
 	"\x12PullDeltasResponse\x12/\n" +
 	"\tmutations\x18\x01 \x03(\v2\x11.sync.v1.MutationR\tmutations\x12\x1a\n" +
 	"\brevision\x18\x02 \x01(\x03R\brevision\x12\x19\n" +
-	"\bhas_more\x18\x03 \x01(\bR\ahasMore\"\x91\x01\n" +
+	"\bhas_more\x18\x03 \x01(\bR\ahasMore\"\xa9\x01\n" +
 	"\x19RequestAssetUploadRequest\x12\x1d\n" +
 	"\n" +
 	"capture_id\x18\x01 \x01(\tR\tcaptureId\x12\x19\n" +
 	"\basset_id\x18\x02 \x01(\tR\aassetId\x12\x1b\n" +
 	"\tmime_type\x18\x03 \x01(\tR\bmimeType\x12\x1d\n" +
 	"\n" +
-	"size_bytes\x18\x04 \x01(\x03R\tsizeBytes\"Z\n" +
+	"size_bytes\x18\x04 \x01(\x03R\tsizeBytes\x12\x16\n" +
+	"\x06sha256\x18\x05 \x01(\tR\x06sha256\"\xb0\x02\n" +
 	"\x1aRequestAssetUploadResponse\x12\x1d\n" +
 	"\n" +
 	"upload_url\x18\x01 \x01(\tR\tuploadUrl\x12\x1d\n" +
 	"\n" +
-	"object_key\x18\x02 \x01(\tR\tobjectKey\"n\n" +
+	"object_key\x18\x02 \x01(\tR\tobjectKey\x12c\n" +
+	"\x10required_headers\x18\x03 \x03(\v28.sync.v1.RequestAssetUploadResponse.RequiredHeadersEntryR\x0frequiredHeaders\x12+\n" +
+	"\x12expires_at_unix_ms\x18\x04 \x01(\x03R\x0fexpiresAtUnixMs\x1aB\n" +
+	"\x14RequiredHeadersEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"n\n" +
 	"\x1aCompleteAssetUploadRequest\x12\x1d\n" +
 	"\n" +
 	"capture_id\x18\x01 \x01(\tR\tcaptureId\x12\x19\n" +
 	"\basset_id\x18\x02 \x01(\tR\aassetId\x12\x16\n" +
-	"\x06sha256\x18\x03 \x01(\tR\x06sha256\"9\n" +
+	"\x06sha256\x18\x03 \x01(\tR\x06sha256\"|\n" +
 	"\x1bCompleteAssetUploadResponse\x12\x1a\n" +
-	"\bverified\x18\x01 \x01(\bR\bverified2\xe5\x02\n" +
+	"\bverified\x18\x01 \x01(\bR\bverified\x12+\n" +
+	"\x11manifest_complete\x18\x02 \x01(\bR\x10manifestComplete\x12\x14\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error2\xe5\x02\n" +
 	"\vSyncService\x12N\n" +
 	"\rPushMutations\x12\x1d.sync.v1.PushMutationsRequest\x1a\x1e.sync.v1.PushMutationsResponse\x12E\n" +
 	"\n" +
@@ -981,7 +1032,7 @@ func file_sync_v1_sync_proto_rawDescGZIP() []byte {
 	return file_sync_v1_sync_proto_rawDescData
 }
 
-var file_sync_v1_sync_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
+var file_sync_v1_sync_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
 var file_sync_v1_sync_proto_goTypes = []any{
 	(*SetTitle)(nil),                    // 0: sync.v1.SetTitle
 	(*SetSummary)(nil),                  // 1: sync.v1.SetSummary
@@ -998,6 +1049,7 @@ var file_sync_v1_sync_proto_goTypes = []any{
 	(*RequestAssetUploadResponse)(nil),  // 12: sync.v1.RequestAssetUploadResponse
 	(*CompleteAssetUploadRequest)(nil),  // 13: sync.v1.CompleteAssetUploadRequest
 	(*CompleteAssetUploadResponse)(nil), // 14: sync.v1.CompleteAssetUploadResponse
+	nil,                                 // 15: sync.v1.RequestAssetUploadResponse.RequiredHeadersEntry
 }
 var file_sync_v1_sync_proto_depIdxs = []int32{
 	0,  // 0: sync.v1.Mutation.set_title:type_name -> sync.v1.SetTitle
@@ -1008,19 +1060,20 @@ var file_sync_v1_sync_proto_depIdxs = []int32{
 	5,  // 5: sync.v1.PushMutationsRequest.mutations:type_name -> sync.v1.Mutation
 	7,  // 6: sync.v1.PushMutationsResponse.results:type_name -> sync.v1.PushMutationsResult
 	5,  // 7: sync.v1.PullDeltasResponse.mutations:type_name -> sync.v1.Mutation
-	6,  // 8: sync.v1.SyncService.PushMutations:input_type -> sync.v1.PushMutationsRequest
-	9,  // 9: sync.v1.SyncService.PullDeltas:input_type -> sync.v1.PullDeltasRequest
-	11, // 10: sync.v1.SyncService.RequestAssetUpload:input_type -> sync.v1.RequestAssetUploadRequest
-	13, // 11: sync.v1.SyncService.CompleteAssetUpload:input_type -> sync.v1.CompleteAssetUploadRequest
-	8,  // 12: sync.v1.SyncService.PushMutations:output_type -> sync.v1.PushMutationsResponse
-	10, // 13: sync.v1.SyncService.PullDeltas:output_type -> sync.v1.PullDeltasResponse
-	12, // 14: sync.v1.SyncService.RequestAssetUpload:output_type -> sync.v1.RequestAssetUploadResponse
-	14, // 15: sync.v1.SyncService.CompleteAssetUpload:output_type -> sync.v1.CompleteAssetUploadResponse
-	12, // [12:16] is the sub-list for method output_type
-	8,  // [8:12] is the sub-list for method input_type
-	8,  // [8:8] is the sub-list for extension type_name
-	8,  // [8:8] is the sub-list for extension extendee
-	0,  // [0:8] is the sub-list for field type_name
+	15, // 8: sync.v1.RequestAssetUploadResponse.required_headers:type_name -> sync.v1.RequestAssetUploadResponse.RequiredHeadersEntry
+	6,  // 9: sync.v1.SyncService.PushMutations:input_type -> sync.v1.PushMutationsRequest
+	9,  // 10: sync.v1.SyncService.PullDeltas:input_type -> sync.v1.PullDeltasRequest
+	11, // 11: sync.v1.SyncService.RequestAssetUpload:input_type -> sync.v1.RequestAssetUploadRequest
+	13, // 12: sync.v1.SyncService.CompleteAssetUpload:input_type -> sync.v1.CompleteAssetUploadRequest
+	8,  // 13: sync.v1.SyncService.PushMutations:output_type -> sync.v1.PushMutationsResponse
+	10, // 14: sync.v1.SyncService.PullDeltas:output_type -> sync.v1.PullDeltasResponse
+	12, // 15: sync.v1.SyncService.RequestAssetUpload:output_type -> sync.v1.RequestAssetUploadResponse
+	14, // 16: sync.v1.SyncService.CompleteAssetUpload:output_type -> sync.v1.CompleteAssetUploadResponse
+	13, // [13:17] is the sub-list for method output_type
+	9,  // [9:13] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_sync_v1_sync_proto_init() }
@@ -1041,7 +1094,7 @@ func file_sync_v1_sync_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_sync_v1_sync_proto_rawDesc), len(file_sync_v1_sync_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   15,
+			NumMessages:   16,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

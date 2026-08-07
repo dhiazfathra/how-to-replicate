@@ -115,6 +115,132 @@ func (s *pgStore) InsertComment(ctx context.Context, commentID, captureID, autho
 	return nil
 }
 
+func (s *pgStore) GetAssetForWorkspace(ctx context.Context, assetID, captureID, workspaceID string) (Asset, bool, error) {
+	row, err := s.q.GetAssetForWorkspace(ctx, sqlcgen.GetAssetForWorkspaceParams{
+		ID:          assetID,
+		CaptureID:   captureID,
+		WorkspaceID: workspaceID,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Asset{}, false, nil
+		}
+		return Asset{}, false, fmt.Errorf("pgstore: get asset: %w", err)
+	}
+	return assetFromRow(row), true, nil
+}
+
+func (s *pgStore) UpsertAssetForUpload(ctx context.Context, asset Asset) (Asset, error) {
+	row, err := s.q.UpsertAssetForUpload(ctx, sqlcgen.UpsertAssetForUploadParams{
+		ID:        asset.ID,
+		CaptureID: asset.CaptureID,
+		Kind:      asset.Kind,
+		MimeType:  asset.MimeType,
+		SizeBytes: asset.SizeBytes,
+		ObjectKey: asset.ObjectKey,
+	})
+	if err != nil {
+		return Asset{}, fmt.Errorf("pgstore: upsert asset: %w", err)
+	}
+	return assetFromRow(row), nil
+}
+
+func (s *pgStore) CreateAssetUploadPresign(ctx context.Context, p AssetUploadPresign) error {
+	_, err := s.q.CreateAssetUploadPresign(ctx, sqlcgen.CreateAssetUploadPresignParams{
+		ID:             p.ID,
+		AssetID:        p.AssetID,
+		ObjectKey:      p.ObjectKey,
+		ChecksumSha256: p.ChecksumSHA256,
+		SizeBytes:      p.SizeBytes,
+		ExpiresAt:      pgtype.Timestamptz{Time: p.ExpiresAt, Valid: true},
+	})
+	if err != nil {
+		return fmt.Errorf("pgstore: create asset upload presign: %w", err)
+	}
+	return nil
+}
+
+func (s *pgStore) GetAssetUploadPresignByKey(ctx context.Context, objectKey string) (AssetUploadPresign, bool, error) {
+	row, err := s.q.GetAssetUploadPresignByKey(ctx, objectKey)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return AssetUploadPresign{}, false, nil
+		}
+		return AssetUploadPresign{}, false, fmt.Errorf("pgstore: get asset upload presign: %w", err)
+	}
+	return AssetUploadPresign{
+		ID:             row.ID,
+		AssetID:        row.AssetID,
+		ObjectKey:      row.ObjectKey,
+		ChecksumSHA256: row.ChecksumSha256,
+		SizeBytes:      row.SizeBytes,
+		ExpiresAt:      row.ExpiresAt.Time,
+	}, true, nil
+}
+
+func (s *pgStore) ConsumeAssetUploadPresign(ctx context.Context, objectKey string) (bool, error) {
+	_, err := s.q.ConsumeAssetUploadPresign(ctx, objectKey)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("pgstore: consume asset upload presign: %w", err)
+	}
+	return true, nil
+}
+
+func (s *pgStore) MarkAssetVerified(ctx context.Context, assetID, sha256Hex string, sizeBytes int64) error {
+	_, err := s.q.MarkAssetVerified(ctx, sqlcgen.MarkAssetVerifiedParams{
+		ID:        assetID,
+		Sha256:    pgtype.Text{String: sha256Hex, Valid: true},
+		SizeBytes: sizeBytes,
+	})
+	if err != nil {
+		return fmt.Errorf("pgstore: mark asset verified: %w", err)
+	}
+	return nil
+}
+
+func (s *pgStore) ManifestComplete(ctx context.Context, captureID string) (bool, error) {
+	total, err := s.q.CountAssetsForCapture(ctx, captureID)
+	if err != nil {
+		return false, fmt.Errorf("pgstore: count assets: %w", err)
+	}
+	if total == 0 {
+		return false, nil
+	}
+	unverified, err := s.q.CountUnverifiedAssetsForCapture(ctx, captureID)
+	if err != nil {
+		return false, fmt.Errorf("pgstore: count unverified assets: %w", err)
+	}
+	return unverified == 0, nil
+}
+
+func (s *pgStore) SetCaptureManifestComplete(ctx context.Context, captureID string, complete bool) error {
+	_, err := s.q.SetCaptureManifestComplete(ctx, sqlcgen.SetCaptureManifestCompleteParams{
+		ID:               captureID,
+		ManifestComplete: complete,
+	})
+	if err != nil {
+		return fmt.Errorf("pgstore: set capture manifest complete: %w", err)
+	}
+	return nil
+}
+
+func assetFromRow(row sqlcgen.Asset) Asset {
+	return Asset{
+		ID:         row.ID,
+		CaptureID:  row.CaptureID,
+		Kind:       row.Kind,
+		MimeType:   row.MimeType,
+		SizeBytes:  row.SizeBytes,
+		ObjectKey:  row.ObjectKey,
+		Sha256:     row.Sha256.String,
+		VerifiedAt: row.VerifiedAt.Time,
+		Verified:   row.VerifiedAt.Valid,
+	}
+}
+
 func (s *pgStore) RecordSupersededMutation(ctx context.Context, workspaceID, captureID, mutationID, field string) error {
 	// map[string]string of two plain strings cannot fail to marshal.
 	details, _ := json.Marshal(map[string]string{"mutation_id": mutationID, "field": field})

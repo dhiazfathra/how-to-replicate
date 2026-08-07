@@ -58,8 +58,13 @@ type Gateway struct {
 
 	// Now returns the server-received timestamp for a mutation. Defaults to
 	// time.Now; tests override it to construct exact ties across the
-	// (timestamp, revision, mutation ID) tuple.
+	// (timestamp, revision, mutation ID) tuple, and to construct expired
+	// presigns deterministically in asset-upload tests.
 	Now func() time.Time
+
+	// Storage issues and verifies asset-upload presigns (Task 5). Nil unless
+	// the caller wires RequestAssetUpload/CompleteAssetUpload.
+	Storage ObjectStore
 }
 
 func (g *Gateway) now() time.Time {

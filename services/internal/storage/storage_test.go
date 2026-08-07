@@ -102,6 +102,56 @@ func TestClient_Stat_Validation(t *testing.T) {
 	}
 }
 
+func TestClient_PresignPutChecksummed_Validation(t *testing.T) {
+	c := newTestClient(t)
+	validSha := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+	if _, _, err := c.PresignPutChecksummed(context.Background(), "", time.Minute, validSha); err == nil {
+		t.Fatal("expected error for empty key")
+	}
+	if _, _, err := c.PresignPutChecksummed(context.Background(), "key", 0, validSha); err == nil {
+		t.Fatal("expected error for non-positive expiry")
+	}
+	if _, _, err := c.PresignPutChecksummed(context.Background(), "key", time.Minute, "not-hex"); err == nil {
+		t.Fatal("expected error for non-hex sha256")
+	}
+	if _, _, err := c.PresignPutChecksummed(context.Background(), "key", time.Minute, "abcd"); err == nil {
+		t.Fatal("expected error for short sha256")
+	}
+
+	// Valid inputs, but nothing is listening on localhost:9000: exercises
+	// the wrapped-error return path. The success path (and the required
+	// headers map) is covered by the real-MinIO integration test.
+	if _, _, err := c.PresignPutChecksummed(context.Background(), "captures/evidence.mp4", time.Minute, validSha); err == nil {
+		t.Fatal("expected error from unreachable server")
+	}
+}
+
+func TestClient_HashObject_Validation(t *testing.T) {
+	c := newTestClient(t)
+
+	if _, err := c.HashObject(context.Background(), ""); err == nil {
+		t.Fatal("expected error for empty key")
+	}
+	if _, err := c.HashObject(context.Background(), "captures/evidence.mp4"); err == nil {
+		t.Fatal("expected error from unreachable server")
+	}
+}
+
+func TestClient_EnsureHardenedBucket_UnreachableServer(t *testing.T) {
+	c := newTestClient(t)
+	if err := c.EnsureHardenedBucket(context.Background()); err == nil {
+		t.Fatal("expected error from unreachable server")
+	}
+}
+
+func TestClient_CurrentBucketPolicy_UnreachableServer(t *testing.T) {
+	c := newTestClient(t)
+	if _, err := c.CurrentBucketPolicy(context.Background()); err == nil {
+		t.Fatal("expected error from unreachable server")
+	}
+}
+
 func TestClient_Delete_Validation(t *testing.T) {
 	c := newTestClient(t)
 

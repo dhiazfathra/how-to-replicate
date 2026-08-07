@@ -11,6 +11,53 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const consumeAssetUploadPresign = `-- name: ConsumeAssetUploadPresign :one
+UPDATE asset_upload_presigns SET consumed_at = now()
+WHERE object_key = $1 AND consumed_at IS NULL
+RETURNING id, asset_id, object_key, checksum_sha256, size_bytes, expires_at, consumed_at, created_at
+`
+
+// Flips consumed_at exactly once. ON conflict with an already-consumed row
+// the WHERE clause excludes it, so sqlc's :one returns pgx.ErrNoRows —
+// callers read that as "already consumed, refuse" without a second query.
+func (q *Queries) ConsumeAssetUploadPresign(ctx context.Context, objectKey string) (AssetUploadPresign, error) {
+	row := q.db.QueryRow(ctx, consumeAssetUploadPresign, objectKey)
+	var i AssetUploadPresign
+	err := row.Scan(
+		&i.ID,
+		&i.AssetID,
+		&i.ObjectKey,
+		&i.ChecksumSha256,
+		&i.SizeBytes,
+		&i.ExpiresAt,
+		&i.ConsumedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const countAssetsForCapture = `-- name: CountAssetsForCapture :one
+SELECT count(*) FROM assets WHERE capture_id = $1
+`
+
+func (q *Queries) CountAssetsForCapture(ctx context.Context, captureID string) (int64, error) {
+	row := q.db.QueryRow(ctx, countAssetsForCapture, captureID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countUnverifiedAssetsForCapture = `-- name: CountUnverifiedAssetsForCapture :one
+SELECT count(*) FROM assets WHERE capture_id = $1 AND verified_at IS NULL
+`
+
+func (q *Queries) CountUnverifiedAssetsForCapture(ctx context.Context, captureID string) (int64, error) {
+	row := q.db.QueryRow(ctx, countUnverifiedAssetsForCapture, captureID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createAsset = `-- name: CreateAsset :one
 INSERT INTO assets (id, capture_id, kind, mime_type, size_bytes, chunk_count, sha256, object_key)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, capture_id, kind, mime_type, size_bytes, chunk_count, sha256, object_key, verified_at, created_at
@@ -49,6 +96,43 @@ func (q *Queries) CreateAsset(ctx context.Context, arg CreateAssetParams) (Asset
 		&i.Sha256,
 		&i.ObjectKey,
 		&i.VerifiedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const createAssetUploadPresign = `-- name: CreateAssetUploadPresign :one
+INSERT INTO asset_upload_presigns (id, asset_id, object_key, checksum_sha256, size_bytes, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6) RETURNING id, asset_id, object_key, checksum_sha256, size_bytes, expires_at, consumed_at, created_at
+`
+
+type CreateAssetUploadPresignParams struct {
+	ID             string             `json:"id"`
+	AssetID        string             `json:"asset_id"`
+	ObjectKey      string             `json:"object_key"`
+	ChecksumSha256 string             `json:"checksum_sha256"`
+	SizeBytes      int64              `json:"size_bytes"`
+	ExpiresAt      pgtype.Timestamptz `json:"expires_at"`
+}
+
+func (q *Queries) CreateAssetUploadPresign(ctx context.Context, arg CreateAssetUploadPresignParams) (AssetUploadPresign, error) {
+	row := q.db.QueryRow(ctx, createAssetUploadPresign,
+		arg.ID,
+		arg.AssetID,
+		arg.ObjectKey,
+		arg.ChecksumSha256,
+		arg.SizeBytes,
+		arg.ExpiresAt,
+	)
+	var i AssetUploadPresign
+	err := row.Scan(
+		&i.ID,
+		&i.AssetID,
+		&i.ObjectKey,
+		&i.ChecksumSha256,
+		&i.SizeBytes,
+		&i.ExpiresAt,
+		&i.ConsumedAt,
 		&i.CreatedAt,
 	)
 	return i, err
@@ -479,6 +563,59 @@ func (q *Queries) GetAsset(ctx context.Context, id string) (Asset, error) {
 	return i, err
 }
 
+const getAssetForWorkspace = `-- name: GetAssetForWorkspace :one
+SELECT a.id, a.capture_id, a.kind, a.mime_type, a.size_bytes, a.chunk_count, a.sha256, a.object_key, a.verified_at, a.created_at FROM assets a
+JOIN captures c ON c.id = a.capture_id
+WHERE a.id = $1 AND a.capture_id = $2 AND c.workspace_id = $3
+`
+
+type GetAssetForWorkspaceParams struct {
+	ID          string `json:"id"`
+	CaptureID   string `json:"capture_id"`
+	WorkspaceID string `json:"workspace_id"`
+}
+
+// Same no-existence-leak shape as LockCaptureForWorkspace: an asset id that
+// belongs to a capture outside the caller's workspace, or doesn't exist at
+// all, is indistinguishable pgx.ErrNoRows to the caller.
+func (q *Queries) GetAssetForWorkspace(ctx context.Context, arg GetAssetForWorkspaceParams) (Asset, error) {
+	row := q.db.QueryRow(ctx, getAssetForWorkspace, arg.ID, arg.CaptureID, arg.WorkspaceID)
+	var i Asset
+	err := row.Scan(
+		&i.ID,
+		&i.CaptureID,
+		&i.Kind,
+		&i.MimeType,
+		&i.SizeBytes,
+		&i.ChunkCount,
+		&i.Sha256,
+		&i.ObjectKey,
+		&i.VerifiedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getAssetUploadPresignByKey = `-- name: GetAssetUploadPresignByKey :one
+SELECT id, asset_id, object_key, checksum_sha256, size_bytes, expires_at, consumed_at, created_at FROM asset_upload_presigns WHERE object_key = $1
+`
+
+func (q *Queries) GetAssetUploadPresignByKey(ctx context.Context, objectKey string) (AssetUploadPresign, error) {
+	row := q.db.QueryRow(ctx, getAssetUploadPresignByKey, objectKey)
+	var i AssetUploadPresign
+	err := row.Scan(
+		&i.ID,
+		&i.AssetID,
+		&i.ObjectKey,
+		&i.ChecksumSha256,
+		&i.SizeBytes,
+		&i.ExpiresAt,
+		&i.ConsumedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getAuditLog = `-- name: GetAuditLog :one
 SELECT id, workspace_id, actor_id, action, subject, details, created_at FROM audit_log WHERE id = $1
 `
@@ -841,6 +978,34 @@ func (q *Queries) LockCaptureForWorkspace(ctx context.Context, arg LockCaptureFo
 	return i, err
 }
 
+const markAssetVerified = `-- name: MarkAssetVerified :one
+UPDATE assets SET sha256 = $2, size_bytes = $3, verified_at = now() WHERE id = $1 RETURNING id, capture_id, kind, mime_type, size_bytes, chunk_count, sha256, object_key, verified_at, created_at
+`
+
+type MarkAssetVerifiedParams struct {
+	ID        string      `json:"id"`
+	Sha256    pgtype.Text `json:"sha256"`
+	SizeBytes int64       `json:"size_bytes"`
+}
+
+func (q *Queries) MarkAssetVerified(ctx context.Context, arg MarkAssetVerifiedParams) (Asset, error) {
+	row := q.db.QueryRow(ctx, markAssetVerified, arg.ID, arg.Sha256, arg.SizeBytes)
+	var i Asset
+	err := row.Scan(
+		&i.ID,
+		&i.CaptureID,
+		&i.Kind,
+		&i.MimeType,
+		&i.SizeBytes,
+		&i.ChunkCount,
+		&i.Sha256,
+		&i.ObjectKey,
+		&i.VerifiedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const revokeShareLink = `-- name: RevokeShareLink :one
 UPDATE share_links SET revoked_at = now() WHERE id = $1 RETURNING id, capture_id, token, created_by, revoked_at, expires_at, created_at
 `
@@ -856,6 +1021,38 @@ func (q *Queries) RevokeShareLink(ctx context.Context, id string) (ShareLink, er
 		&i.RevokedAt,
 		&i.ExpiresAt,
 		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const setCaptureManifestComplete = `-- name: SetCaptureManifestComplete :one
+UPDATE captures SET manifest_complete = $2 WHERE id = $1 RETURNING id, workspace_id, project_id, source, state, fidelity, created_at, epoch, env, metadata, doc, withheld_event_count, revision, manifest_complete, applied_ruleset_version
+`
+
+type SetCaptureManifestCompleteParams struct {
+	ID               string `json:"id"`
+	ManifestComplete bool   `json:"manifest_complete"`
+}
+
+func (q *Queries) SetCaptureManifestComplete(ctx context.Context, arg SetCaptureManifestCompleteParams) (Capture, error) {
+	row := q.db.QueryRow(ctx, setCaptureManifestComplete, arg.ID, arg.ManifestComplete)
+	var i Capture
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.Source,
+		&i.State,
+		&i.Fidelity,
+		&i.CreatedAt,
+		&i.Epoch,
+		&i.Env,
+		&i.Metadata,
+		&i.Doc,
+		&i.WithheldEventCount,
+		&i.Revision,
+		&i.ManifestComplete,
+		&i.AppliedRulesetVersion,
 	)
 	return i, err
 }
@@ -889,6 +1086,53 @@ func (q *Queries) UpdateCaptureRevisionAndDoc(ctx context.Context, arg UpdateCap
 		&i.Revision,
 		&i.ManifestComplete,
 		&i.AppliedRulesetVersion,
+	)
+	return i, err
+}
+
+const upsertAssetForUpload = `-- name: UpsertAssetForUpload :one
+INSERT INTO assets (id, capture_id, kind, mime_type, size_bytes, chunk_count, sha256, object_key)
+VALUES ($1, $2, $3, $4, $5, 0, NULL, $6)
+ON CONFLICT (id) DO UPDATE SET object_key = EXCLUDED.object_key
+RETURNING id, capture_id, kind, mime_type, size_bytes, chunk_count, sha256, object_key, verified_at, created_at
+`
+
+type UpsertAssetForUploadParams struct {
+	ID        string `json:"id"`
+	CaptureID string `json:"capture_id"`
+	Kind      string `json:"kind"`
+	MimeType  string `json:"mime_type"`
+	SizeBytes int64  `json:"size_bytes"`
+	ObjectKey string `json:"object_key"`
+}
+
+// Creates the manifest entry (ADR-012: "the manifest entry for each asset
+// carries the expected size and content hash before the PUT is issued") on
+// first request, or repoints object_key at a freshly minted key on
+// re-request. sha256/size_bytes/verified_at are deliberately left untouched
+// here — they only ever change via MarkAssetVerified, so a re-request can
+// never itself flip a verified asset back to unverified.
+func (q *Queries) UpsertAssetForUpload(ctx context.Context, arg UpsertAssetForUploadParams) (Asset, error) {
+	row := q.db.QueryRow(ctx, upsertAssetForUpload,
+		arg.ID,
+		arg.CaptureID,
+		arg.Kind,
+		arg.MimeType,
+		arg.SizeBytes,
+		arg.ObjectKey,
+	)
+	var i Asset
+	err := row.Scan(
+		&i.ID,
+		&i.CaptureID,
+		&i.Kind,
+		&i.MimeType,
+		&i.SizeBytes,
+		&i.ChunkCount,
+		&i.Sha256,
+		&i.ObjectKey,
+		&i.VerifiedAt,
+		&i.CreatedAt,
 	)
 	return i, err
 }

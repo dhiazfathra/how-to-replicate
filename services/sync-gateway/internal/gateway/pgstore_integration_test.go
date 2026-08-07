@@ -258,4 +258,181 @@ func TestPgStore_ErrorWrapping(t *testing.T) {
 			t.Fatalf("want FK-violation error, got nil")
 		}
 	})
+
+	t.Run("GetAssetForWorkspace on a cancelled context", func(t *testing.T) {
+		if _, _, err := store.GetAssetForWorkspace(cancelled, "no_asset", "cap_int", workspaceID); err == nil {
+			t.Fatalf("want error, got nil")
+		}
+	})
+
+	t.Run("GetAssetForWorkspace not found", func(t *testing.T) {
+		_, found, err := store.GetAssetForWorkspace(ctx, "no_such_asset", "cap_int", workspaceID)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if found {
+			t.Fatalf("want found=false for a nonexistent asset")
+		}
+	})
+
+	t.Run("UpsertAssetForUpload against a nonexistent capture", func(t *testing.T) {
+		if _, err := store.UpsertAssetForUpload(ctx, Asset{ID: "ax1", CaptureID: "does_not_exist", Kind: "video", MimeType: "video/mp4", SizeBytes: 1, ObjectKey: "k1"}); err == nil {
+			t.Fatalf("want FK-violation error, got nil")
+		}
+	})
+
+	t.Run("CreateAssetUploadPresign against a nonexistent asset", func(t *testing.T) {
+		if err := store.CreateAssetUploadPresign(ctx, AssetUploadPresign{ID: "k-missing", AssetID: "does_not_exist", ObjectKey: "k-missing", ChecksumSHA256: "x", SizeBytes: 1, ExpiresAt: time.Now()}); err == nil {
+			t.Fatalf("want FK-violation error, got nil")
+		}
+	})
+
+	t.Run("GetAssetUploadPresignByKey on a cancelled context", func(t *testing.T) {
+		if _, _, err := store.GetAssetUploadPresignByKey(cancelled, "k1"); err == nil {
+			t.Fatalf("want error, got nil")
+		}
+	})
+
+	t.Run("GetAssetUploadPresignByKey not found", func(t *testing.T) {
+		_, found, err := store.GetAssetUploadPresignByKey(ctx, "no-such-key")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if found {
+			t.Fatalf("want found=false for a nonexistent presign")
+		}
+	})
+
+	t.Run("ConsumeAssetUploadPresign on a cancelled context", func(t *testing.T) {
+		if _, err := store.ConsumeAssetUploadPresign(cancelled, "k1"); err == nil {
+			t.Fatalf("want error, got nil")
+		}
+	})
+
+	t.Run("ConsumeAssetUploadPresign not found", func(t *testing.T) {
+		ok, err := store.ConsumeAssetUploadPresign(ctx, "no-such-key")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if ok {
+			t.Fatalf("want ok=false for a nonexistent presign")
+		}
+	})
+
+	t.Run("MarkAssetVerified against a nonexistent asset", func(t *testing.T) {
+		if err := store.MarkAssetVerified(ctx, "does_not_exist", "abc", 1); err == nil {
+			t.Fatalf("want no-rows error, got nil")
+		}
+	})
+
+	t.Run("ManifestComplete on a cancelled context", func(t *testing.T) {
+		if _, err := store.ManifestComplete(cancelled, "cap_int"); err == nil {
+			t.Fatalf("want error, got nil")
+		}
+	})
+
+	t.Run("SetCaptureManifestComplete against a nonexistent capture", func(t *testing.T) {
+		if err := store.SetCaptureManifestComplete(ctx, "does_not_exist", true); err == nil {
+			t.Fatalf("want no-rows error, got nil")
+		}
+	})
+}
+
+// TestPgStore_Assets_Integration exercises the full asset-manifest write
+// path directly against pgStore: create, upsert-on-re-request, presign
+// lifecycle, and manifest completion counting, against real Postgres rather
+// than the in-memory fake.
+func TestPgStore_Assets_Integration(t *testing.T) {
+	ctx := context.Background()
+	pool, workspaceID := setupRuntimePool(t, ctx)
+	store := &pgStore{q: sqlcgen.New(pool)}
+
+	asset, err := store.UpsertAssetForUpload(ctx, Asset{
+		ID: "asset_pg1", CaptureID: "cap_int", Kind: "video", MimeType: "video/mp4",
+		SizeBytes: 10, ObjectKey: "key-1",
+	})
+	if err != nil {
+		t.Fatalf("upsert asset: %v", err)
+	}
+	if asset.ObjectKey != "key-1" || asset.Verified {
+		t.Fatalf("unexpected initial asset state: %+v", asset)
+	}
+
+	fetched, found, err := store.GetAssetForWorkspace(ctx, "asset_pg1", "cap_int", workspaceID)
+	if err != nil || !found {
+		t.Fatalf("get asset: found=%v err=%v", found, err)
+	}
+	if fetched.ObjectKey != "key-1" {
+		t.Fatalf("unexpected fetched asset: %+v", fetched)
+	}
+
+	// Re-request repoints object_key without touching verification state.
+	reRequested, err := store.UpsertAssetForUpload(ctx, Asset{
+		ID: "asset_pg1", CaptureID: "cap_int", Kind: "video", MimeType: "video/mp4",
+		SizeBytes: 10, ObjectKey: "key-2",
+	})
+	if err != nil {
+		t.Fatalf("re-upsert asset: %v", err)
+	}
+	if reRequested.ObjectKey != "key-2" {
+		t.Fatalf("want repointed object key, got %+v", reRequested)
+	}
+
+	complete, err := store.ManifestComplete(ctx, "cap_int")
+	if err != nil {
+		t.Fatalf("manifest complete: %v", err)
+	}
+	if complete {
+		t.Fatalf("want incomplete manifest before verification")
+	}
+
+	if err := store.CreateAssetUploadPresign(ctx, AssetUploadPresign{
+		ID: "key-2", AssetID: "asset_pg1", ObjectKey: "key-2",
+		ChecksumSHA256: "abc", SizeBytes: 10, ExpiresAt: time.Now().Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("create presign: %v", err)
+	}
+
+	presign, found, err := store.GetAssetUploadPresignByKey(ctx, "key-2")
+	if err != nil || !found {
+		t.Fatalf("get presign: found=%v err=%v", found, err)
+	}
+	if presign.ChecksumSHA256 != "abc" {
+		t.Fatalf("unexpected presign: %+v", presign)
+	}
+
+	ok, err := store.ConsumeAssetUploadPresign(ctx, "key-2")
+	if err != nil || !ok {
+		t.Fatalf("consume presign: ok=%v err=%v", ok, err)
+	}
+	// A second consume must report ok=false without erroring.
+	ok2, err := store.ConsumeAssetUploadPresign(ctx, "key-2")
+	if err != nil || ok2 {
+		t.Fatalf("want ok=false on replay consume, got ok=%v err=%v", ok2, err)
+	}
+
+	if err := store.MarkAssetVerified(ctx, "asset_pg1", "deadbeef", 10); err != nil {
+		t.Fatalf("mark verified: %v", err)
+	}
+
+	complete, err = store.ManifestComplete(ctx, "cap_int")
+	if err != nil {
+		t.Fatalf("manifest complete: %v", err)
+	}
+	if !complete {
+		t.Fatalf("want complete manifest after the only asset verifies")
+	}
+
+	if err := store.SetCaptureManifestComplete(ctx, "cap_int", true); err != nil {
+		t.Fatalf("set manifest complete: %v", err)
+	}
+
+	q := sqlcgen.New(pool)
+	capture, err := q.GetCapture(ctx, "cap_int")
+	if err != nil {
+		t.Fatalf("get capture: %v", err)
+	}
+	if !capture.ManifestComplete {
+		t.Fatalf("want manifest_complete persisted true")
+	}
 }

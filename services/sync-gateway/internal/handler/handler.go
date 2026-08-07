@@ -64,6 +64,88 @@ func (s *SyncService) PushMutations(
 	return connect.NewResponse(resp), nil
 }
 
+// RequestAssetUpload requires capture:write, same as PushMutations — an
+// asset upload is a write against the capture it belongs to.
+func (s *SyncService) RequestAssetUpload(
+	ctx context.Context,
+	req *connect.Request[syncv1.RequestAssetUploadRequest],
+) (*connect.Response[syncv1.RequestAssetUploadResponse], error) {
+	workspaceID, ok := authctx.WorkspaceID(ctx)
+	if !ok {
+		return nil, connect.NewError(connect.CodeUnauthenticated, errUnauthenticated)
+	}
+	role, _ := authctx.Role(ctx)
+	if !authz.Can(authz.Role(role), authz.PermissionCaptureWrite) {
+		return nil, connect.NewError(connect.CodePermissionDenied, errPermissionDenied)
+	}
+
+	result, err := s.Gateway.RequestAssetUpload(
+		ctx,
+		workspaceID,
+		req.Msg.GetCaptureId(),
+		req.Msg.GetAssetId(),
+		req.Msg.GetMimeType(),
+		req.Msg.GetSizeBytes(),
+		req.Msg.GetSha256(),
+	)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+	if result.Reason != gateway.AssetReasonNone {
+		return nil, connect.NewError(assetReasonCode(result.Reason), errors.New(string(result.Reason)))
+	}
+
+	return connect.NewResponse(&syncv1.RequestAssetUploadResponse{
+		UploadUrl:       result.UploadURL,
+		ObjectKey:       result.ObjectKey,
+		RequiredHeaders: result.RequiredHeaders,
+		ExpiresAtUnixMs: result.ExpiresAt.UnixMilli(),
+	}), nil
+}
+
+// CompleteAssetUpload requires capture:write for the same reason as
+// RequestAssetUpload. Unlike PushMutations' per-mutation results, a rejected
+// completion IS a transport error here: there is exactly one asset per
+// call, so there is no batch to report partial outcomes across, and the
+// brief calls for "a typed rejection" per call, not a results list.
+func (s *SyncService) CompleteAssetUpload(
+	ctx context.Context,
+	req *connect.Request[syncv1.CompleteAssetUploadRequest],
+) (*connect.Response[syncv1.CompleteAssetUploadResponse], error) {
+	workspaceID, ok := authctx.WorkspaceID(ctx)
+	if !ok {
+		return nil, connect.NewError(connect.CodeUnauthenticated, errUnauthenticated)
+	}
+	role, _ := authctx.Role(ctx)
+	if !authz.Can(authz.Role(role), authz.PermissionCaptureWrite) {
+		return nil, connect.NewError(connect.CodePermissionDenied, errPermissionDenied)
+	}
+
+	result, err := s.Gateway.CompleteAssetUpload(ctx, workspaceID, req.Msg.GetCaptureId(), req.Msg.GetAssetId())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	return connect.NewResponse(&syncv1.CompleteAssetUploadResponse{
+		Verified:         result.Verified,
+		ManifestComplete: result.ManifestComplete,
+		Error:            string(result.Reason),
+	}), nil
+}
+
+// assetReasonCode maps a typed asset rejection to the closest-fitting
+// ConnectRPC status code. AssetReasonNone never reaches this function.
+func assetReasonCode(reason gateway.AssetReason) connect.Code {
+	switch reason {
+	case gateway.AssetReasonNotFound:
+		return connect.CodeNotFound
+	case gateway.AssetReasonInvalidRequest:
+		return connect.CodeInvalidArgument
+	default:
+		return connect.CodeFailedPrecondition
+	}
+}
+
 var (
 	errUnauthenticated  = errors.New("handler: missing workspace id in request context")
 	errPermissionDenied = errors.New("handler: role does not grant capture:write")

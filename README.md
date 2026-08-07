@@ -197,9 +197,9 @@ type-safe Go under `services/internal/db/sqlcgen`. Migrations are plain SQL run 
 `services/sync-gateway/` is the first service to actually wire the schema and protos
 from Task 3 into a running RPC surface. It implements `SyncService.PushMutations`:
 batched, idempotent mutation intake with server-owned revision numbering and
-per-field last-write-wins conflict resolution (spec §10, ADR-012). `PullDeltas`,
-`RequestAssetUpload`, and `CompleteAssetUpload` return `Unimplemented` — they belong
-to Tasks 5 and 6.
+per-field last-write-wins conflict resolution (spec §10, ADR-012), and
+`RequestAssetUpload`/`CompleteAssetUpload` (Task 5, below). `PullDeltas` returns
+`Unimplemented` — it belongs to Task 6.
 
 - **Idempotency** is a plain `INSERT ... ON CONFLICT (id) DO NOTHING` on the
   mutation's client-minted ULID primary key (`InsertMutationIfNew` in
@@ -240,8 +240,80 @@ go build ./...
 go test ./...                       # unit tests always run; pgstore's integration
                                      # test additionally needs Docker (testcontainers)
 HTR_POSTGRES_DSN=postgres://... HTR_RUNTIME_PASSWORD=htr_runtime \
+HTR_S3_ENDPOINT=... HTR_S3_ACCESS_KEY=... HTR_S3_SECRET_KEY=... HTR_S3_BUCKET=... \
   go run ./cmd/sync-gateway          # listens on :8081 by default (HTR_LISTEN_ADDR)
 ```
+
+### Asset upload and manifest verification (Task 5)
+
+`RequestAssetUpload`/`CompleteAssetUpload` are where a capture's video/screenshot
+assets actually get marked synced — the `sync.manifestComplete` flag the client's LRU
+eviction reads (invariant 8), never `lastPushedAt`. See ADR-011 (self-hosted
+S3-compatible object storage) and ADR-012's "Assets" section for the design; this is
+the implementation.
+
+- **The server always selects the object key**, minted fresh on every
+  `RequestAssetUpload` call as `captures/{captureId}/assets/{assetId}/{16 random
+  bytes hex}` — the client never supplies it, and a re-request (even against an
+  already-verified asset) always gets a brand-new key, never a reused one. The old
+  key is simply orphaned.
+- **The presign is single-use**, tracked in a dedicated table
+  (`asset_upload_presigns`, migration `00004_asset_upload_presigns.sql`) rather than
+  inferred from the object key: each issuance is a row with the declared
+  size/checksum and an expiry (`services/internal/gateway/assets.go`'s
+  `presignExpiryFor` — 5 minutes minimum, scaling up to a 30-minute cap for larger
+  declared sizes). `CompleteAssetUpload` atomically consumes the row
+  (`ConsumeAssetUploadPresign`'s `UPDATE ... WHERE consumed_at IS NULL`) before doing
+  any verification, so a replayed completion call — or two concurrent ones — can
+  never verify twice or re-flip `manifest_complete`.
+- **The presigned PUT binds two headers into its SigV4 signature**
+  (`storage.Client.PresignPutChecksummed`, using minio-go's `PresignHeader`):
+  `x-amz-checksum-sha256` (the client-declared hash) and `If-None-Match: *`. The
+  client's PUT must set both exactly or the request fails signature validation
+  before the store looks at the body. **Verified against the real MinIO release this
+  repo pins** (`minio/minio:RELEASE.2024-10-13T13-34-11Z`, via
+  `assets_integration_test.go`): a PUT missing either header is rejected, a body that
+  doesn't match the declared checksum is rejected with 400 at PUT time, and a second
+  PUT to an already-uploaded key is rejected with 412 (conditional-write support).
+  These are real, confirmed behaviors of this MinIO build — not assumed.
+- **Verification never trusts the store's echoed checksum alone.** Regardless of
+  what MinIO enforced at PUT time, `CompleteAssetUpload` always does its own
+  server-side read-and-hash (`storage.Client.HashObject` — a real `GetObject` piped
+  through `sha256`) and compares both size (`Stat`) and hash against what was
+  declared at `RequestAssetUpload` time. A value the client could have influenced
+  (a bare `Stat`/checksum-metadata echo) is never treated as evidence on its own.
+- **A mismatch never deletes the client's copy.** It marks the asset unverified,
+  leaves `manifest_complete` false, and returns a typed rejection
+  (`gateway.AssetReason` — `size_mismatch`, `hash_mismatch`, `presign_expired`,
+  `presign_already_consumed`, `not_uploaded`, `not_found`, `invalid_request`) in
+  `CompleteAssetUploadResponse.error`, the same "typed, not generic" pattern as
+  Task 4's `PushMutationsResult.error`.
+- **`manifest_complete` flips true only when every asset row on the capture is
+  verified** (`ManifestComplete` in `pgstore.go`: `count(assets) > 0 AND
+  count(unverified) = 0`) — a capture with zero asset rows is not "complete", it
+  simply has nothing pending yet.
+- **The bucket is hardened on startup** (`storage.Client.EnsureHardenedBucket`):
+  server-side encryption (SSE-S3) is turned on, and no public bucket policy is ever
+  set (MinIO's default is already private — `CurrentBucketPolicy` asserts that
+  absence in tests rather than fighting MinIO's policy engine for an equivalent
+  explicit deny statement, which it rejects: `aws:PrincipalType` isn't a condition
+  key MinIO implements). `services/internal/testsupport.MinIO` configures the test
+  container with a static single-key KMS (`MINIO_KMS_SECRET_KEY`) so
+  `SetBucketEncryption` has something to enable against, matching how ADR-011's real
+  Nutanix deployment would have its own KMS.
+- **Auth seam**: same pattern as `PushMutations` — `capture:write` via
+  `internal/authctx` and `services/internal/authz`, with Task 10's real identity
+  still pending.
+
+Tests (`services/sync-gateway/internal/gateway/assets_test.go`,
+`assets_integration_test.go`, `pgstore_integration_test.go`, and
+`services/internal/storage/storage_integration_test.go`) cover: the happy path end to
+end against real Postgres and real MinIO (request → real HTTP PUT with the required
+headers → complete → verify); size and hash mismatches each leaving
+`manifestComplete` false without deleting the uploaded object; a replayed PUT and a
+replayed `CompleteAssetUpload` call; an expired presign; a re-request never reusing a
+key even after verification; and the bucket denying an anonymous read. Running them
+needs Docker (testcontainers) — they skip cleanly if no daemon is reachable.
 
 ## Running the extension
 

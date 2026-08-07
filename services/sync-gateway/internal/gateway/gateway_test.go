@@ -28,6 +28,20 @@ type fakeStore struct {
 	updateErr     error
 	commentErr    error
 	supersededErr error
+
+	// asset-upload state (Task 5) — see assets_test.go.
+	assets              map[string]Asset              // assetID -> asset
+	presigns            map[string]AssetUploadPresign // objectKey -> presign
+	consumedPresigns    map[string]bool               // objectKey -> consumed
+	manifestComplete    map[string]bool               // captureID -> flag
+	getAssetErr         error
+	upsertAssetErr      error
+	createPresignErr    error
+	getPresignErr       error
+	consumePresignErr   error
+	markVerifiedErr     error
+	manifestCompleteErr error
+	setManifestErr      error
 }
 
 type insertedComment struct {
@@ -40,9 +54,13 @@ type supersededRecord struct {
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{
-		captures:      map[string]Capture{},
-		mutationSeen:  map[string]bool{},
-		fieldVersions: map[string]FieldVersion{},
+		captures:         map[string]Capture{},
+		mutationSeen:     map[string]bool{},
+		fieldVersions:    map[string]FieldVersion{},
+		assets:           map[string]Asset{},
+		presigns:         map[string]AssetUploadPresign{},
+		consumedPresigns: map[string]bool{},
+		manifestComplete: map[string]bool{},
 	}
 }
 

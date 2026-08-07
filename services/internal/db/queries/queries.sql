@@ -57,6 +57,53 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *;
 -- name: GetAsset :one
 SELECT * FROM assets WHERE id = $1;
 
+-- name: GetAssetForWorkspace :one
+-- Same no-existence-leak shape as LockCaptureForWorkspace: an asset id that
+-- belongs to a capture outside the caller's workspace, or doesn't exist at
+-- all, is indistinguishable pgx.ErrNoRows to the caller.
+SELECT a.* FROM assets a
+JOIN captures c ON c.id = a.capture_id
+WHERE a.id = $1 AND a.capture_id = $2 AND c.workspace_id = $3;
+
+-- name: UpsertAssetForUpload :one
+-- Creates the manifest entry (ADR-012: "the manifest entry for each asset
+-- carries the expected size and content hash before the PUT is issued") on
+-- first request, or repoints object_key at a freshly minted key on
+-- re-request. sha256/size_bytes/verified_at are deliberately left untouched
+-- here — they only ever change via MarkAssetVerified, so a re-request can
+-- never itself flip a verified asset back to unverified.
+INSERT INTO assets (id, capture_id, kind, mime_type, size_bytes, chunk_count, sha256, object_key)
+VALUES ($1, $2, $3, $4, $5, 0, NULL, $6)
+ON CONFLICT (id) DO UPDATE SET object_key = EXCLUDED.object_key
+RETURNING *;
+
+-- name: CreateAssetUploadPresign :one
+INSERT INTO asset_upload_presigns (id, asset_id, object_key, checksum_sha256, size_bytes, expires_at)
+VALUES ($1, $2, $3, $4, $5, $6) RETURNING *;
+
+-- name: GetAssetUploadPresignByKey :one
+SELECT * FROM asset_upload_presigns WHERE object_key = $1;
+
+-- name: ConsumeAssetUploadPresign :one
+-- Flips consumed_at exactly once. ON conflict with an already-consumed row
+-- the WHERE clause excludes it, so sqlc's :one returns pgx.ErrNoRows —
+-- callers read that as "already consumed, refuse" without a second query.
+UPDATE asset_upload_presigns SET consumed_at = now()
+WHERE object_key = $1 AND consumed_at IS NULL
+RETURNING *;
+
+-- name: MarkAssetVerified :one
+UPDATE assets SET sha256 = $2, size_bytes = $3, verified_at = now() WHERE id = $1 RETURNING *;
+
+-- name: CountAssetsForCapture :one
+SELECT count(*) FROM assets WHERE capture_id = $1;
+
+-- name: CountUnverifiedAssetsForCapture :one
+SELECT count(*) FROM assets WHERE capture_id = $1 AND verified_at IS NULL;
+
+-- name: SetCaptureManifestComplete :one
+UPDATE captures SET manifest_complete = $2 WHERE id = $1 RETURNING *;
+
 -- name: CreateMutation :one
 -- Plain insert on the client-minted mutation ULID primary key. Replay is
 -- idempotent because a duplicate ID hits the PK constraint; callers treat
