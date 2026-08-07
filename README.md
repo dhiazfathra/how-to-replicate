@@ -121,7 +121,7 @@ pnpm exec playwright install --with-deps chromium
 | Command | What it does |
 |---|---|
 | `pnpm build` | Builds all three clients into their `dist/` folders |
-| `pnpm test` | Unit tests (669, Vitest, incl. a `fast-check` property suite for sync convergence — see note below) |
+| `pnpm test` | Unit tests (670, Vitest, incl. a `fast-check` property suite for sync convergence) |
 | `pnpm test:coverage` | Unit tests with coverage thresholds enforced |
 | `pnpm e2e` | Builds, then runs the Playwright end-to-end suite in real Chromium |
 | `pnpm e2e:report` | Opens the HTML report from the last e2e run |
@@ -130,16 +130,22 @@ pnpm exec playwright install --with-deps chromium
 | `pnpm typecheck` | `tsc -b` over the workspace, plus the e2e and e2e-nightly projects |
 | `pnpm check:deps` | Enforces invariant 5 — `capture-core` imports nothing from `clients/` |
 
-`packages/capture-core/test/sync-convergence.property.test.ts` currently **fails**
-on `main` — it's a `fast-check` property test proving multi-client sync converges
-under adversarial delivery, and it caught a real bug rather than a test bug: a
-client's own `appendComment` mutation gets duplicated the next time that same
-client calls `pull()`, because `pull()` replays every delta since the last cursor
-with no dedup against mutations the client just pushed itself, and `appendComment`
-(unlike the other ops) isn't idempotent under replay. See
+`packages/capture-core/test/sync-convergence.property.test.ts` is a `fast-check`
+property test proving multi-client sync converges under adversarial delivery. It
+originally caught a real bug (see
 `.superpowers/sdd/2026-08-04-phase-1-implementation/task-8-report.md` for the
-minimal repro and the fix this implies for `packages/capture-core/src/sync/engine.ts`.
-Do not weaken or skip this test to make it pass — it is correctly red.
+original finding and repro): a client's own `appendComment` mutation got
+duplicated the next time that same client called `pull()`, because `pull()`
+replays every delta since the last cursor with no dedup against mutations the
+client just pushed itself, and `appendComment` (unlike the other ops) isn't
+idempotent under replay. Fixed in `applyMutation`'s `appendComment` case
+(`packages/capture-core/src/sync/mutations.ts`): reapplying an already-present
+comment ID is now a no-op, and comments are kept sorted by ID (a chronologically
+monotonic ULID) rather than local application order, so concurrent clients that
+apply the same comment in a different arrival order still converge on the same
+array. See
+`.superpowers/sdd/2026-08-04-phase-1-implementation/task-8-engine-fix-report.md`
+for the fix report. Do not weaken or skip this test — it gates every PR.
 
 ## Go services (Phase 1+)
 

@@ -472,6 +472,40 @@ describe('createSyncEngine', () => {
     expect(await h.repo.getSyncCursor('ws-1')).toBe(2);
   });
 
+  it('appendComment, flush, then pull does not duplicate the client\'s own comment', async () => {
+    // Minimal repro from the sync-convergence property test: flush() removes
+    // the mutation from the local queue once the server confirms it, but
+    // nothing advances the pull cursor first — so the very next pull() refetches
+    // the same delta the client just pushed. appendMutation must be idempotent
+    // under replay (dedup by comment ID) or the comment is appended twice.
+    let pushed: Mutation[] = [];
+    const transport = fakeTransport({
+      pushMutations: vi.fn((mutations: Mutation[]): Promise<PushMutationsResult[]> => {
+        pushed = mutations;
+        return Promise.resolve(mutations.map((m) => ({ mutationId: m.id, applied: true, error: '' })));
+      }),
+      pullDeltas: vi.fn(
+        (): Promise<PullDeltasResult> =>
+          Promise.resolve({ mutations: pushed, revision: 1, hasMore: false }),
+      ),
+    });
+    const engine = createSyncEngine({
+      transport,
+      repo: h.repo,
+      store: h.store,
+      queue: h.queue,
+      workspaceId: 'ws-1',
+    });
+
+    await engine.handle('cap-1').appendComment('hello');
+    await engine.flush();
+    await engine.pull();
+
+    const comments = h.store.capture('cap-1').get()?.metadata.comments;
+    expect(comments).toHaveLength(1);
+    expect((comments as { id: string; body: string }[])[0]?.body).toBe('hello');
+  });
+
   it('pull skips deltas for captures not present locally', async () => {
     const pullDeltas = vi.fn(
       (): Promise<PullDeltasResult> =>

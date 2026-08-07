@@ -123,10 +123,20 @@ export function applyMutation(capture: Capture, op: MutationOp): Capture {
       return withFieldValue(capture, 'metadata.assigneeUserId', op.assigneeUserId);
     case 'appendComment': {
       const existing = getFieldValue(capture, 'metadata.comments') as Comment[];
-      return withFieldValue(capture, 'metadata.comments', [
-        ...existing,
-        { id: op.commentId, body: op.body },
-      ]);
+      // Idempotent under reapplication: comment IDs are client-minted ULIDs,
+      // already unique, so a comment already present (e.g. replayed by
+      // pull() after the client's own flush()) is not appended twice.
+      if (existing.some((c) => c.id === op.commentId)) return capture;
+      // Sorted by ULID rather than local application order: ULIDs are
+      // chronologically monotonic, and clients apply their own comment
+      // optimistically (before push) while a concurrent peer's comment only
+      // arrives later via pull — so raw append order diverges between
+      // clients even though they've applied the same set of comments.
+      // Sorting by ID gives every client the same final order regardless of
+      // arrival order.
+      const merged = [...existing, { id: op.commentId, body: op.body }];
+      merged.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+      return withFieldValue(capture, 'metadata.comments', merged);
     }
   }
 }
