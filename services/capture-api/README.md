@@ -79,3 +79,73 @@ break this — there's exactly one gate to remember.
 | `HTR_SHARE_LINK_KEY_ID`, `HTR_SHARE_LINK_KEY` | current share-link signing key |
 | `HTR_SHARE_LINK_PREVIOUS_KEYS` | optional, comma-separated `id:secret` pairs still accepted for verification |
 | `HTR_LISTEN_ADDR` | defaults to `:8082` |
+
+## Retention windows (Task 13)
+
+Every workspace must have a retention window chosen at creation:
+`POST /v1/workspaces` requires a `retentionDays` field (positive integer)
+in the body. There is no code-level default (`internal/policy.Defaults`
+deliberately has none) — how long PHI-adjacent capture data is kept is a
+Security/Compliance judgment, not an engineering one (spec §22 open
+question 4), so a request omitting it is rejected with 400 rather than
+silently falling back to a number nobody chose. `policy.Policy.Validate()`
+is the single place this is enforced; `createWorkspace` stores the chosen
+value as a `policy_overrides` entry in the same transaction as the
+workspace and its owner membership (`store.CreateWorkspaceWithOwner`).
+
+## The purge state machine (Task 13)
+
+Hard-deleting a capture past its retention window means removing both its
+object-storage blobs and its Postgres metadata — but object storage can't
+enlist in a Postgres transaction, so there's no single atomic unit that
+covers both. Instead, `internal/purge` drives one `purge_jobs` row per
+capture through four explicit, resumable states:
+
+1. **`pending`** — the capture has passed its resolved retention window.
+2. **`tombstoned`** — the capture flips to `state = 'expired'` in one
+   Postgres transaction (with the job row and an audit entry). This is
+   where the *compliance* deadline is met: the same ready-gate every read
+   path already uses (`gateCapture` et al) makes the capture immediately
+   unreadable, unexportable, and unshareable — even though its blobs still
+   exist. Reclaiming them afterward is an operational concern, not a
+   retention breach.
+3. **`blobs-deleting`** — the capture's asset object keys are frozen into
+   the job row, then each is deleted idempotently
+   (`storage.Client.Delete`: deleting an already-absent key is success,
+   not an error) — a resumed job re-issuing deletes for keys an earlier,
+   crashed attempt already removed just succeeds again.
+4. **`blobs-deleted` → `purged`** — asset rows are removed and the
+   capture's disclosable content columns (`doc`/`metadata`/`env`) are
+   cleared, in one final transaction with the job row and an audit entry.
+   The `captures` row itself is never deleted outright: `capture_events`/
+   `comments`/`mutations` reference it by FK and are append-only by
+   trigger (Task 3), so nothing can ever clear the way for a cascading
+   delete — that immutability is deliberate, not an oversight this task
+   works around.
+
+`Pipeline.Advance` performs exactly one step and is safe to call on a job
+in any state, including a fresh `pending` job or one resumed after a crash
+mid-transition — `RunToCompletion` just loops it. `Pipeline.Sweep` creates
+jobs for newly-expired captures (idempotent per capture via a UNIQUE
+constraint); `Pipeline.Reconcile` re-drives every job not yet `purged`;
+`Pipeline.DetectOrphans` lists every bucket object accounted for by
+neither a live asset row nor any purge job's recorded keys — the check
+that makes "no orphans" verifiable rather than assumed. `cmd/purge-job` is
+the background poll loop that runs Sweep → Reconcile → DetectOrphans on an
+interval (`HTR_PURGE_JOB_INTERVAL`, default 1h), reusing the same
+`HTR_S3_*` object-storage environment variables as sync-gateway.
+
+## Audit log (Task 13)
+
+`audit_log` now covers capture creation (`store.CreateCaptureAndAudit`),
+capture access (`store.GetCaptureAndAudit`, used by `getCapture`),
+share-link resolution (Task 11, unchanged), and deletion
+(`capture.delete.tombstoned` / `capture.delete.purged`, written by the
+purge state machine's two transactional steps). Every one of these commits
+the audit row in the same Postgres transaction as the action it records —
+an action can never succeed unaudited. MCP reads are not implemented yet
+(Phase 2), but `audit_log.action` is a plain `TEXT` column, so no schema
+change is needed to add that action name later. Immutability
+(`UPDATE`/`DELETE` rejected outright) is enforced by Task 3's
+`reject_mutation` trigger, re-confirmed against these new write paths in
+`store`'s integration tests.

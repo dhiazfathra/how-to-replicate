@@ -11,6 +11,42 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const clearCaptureContentForPurge = `-- name: ClearCaptureContentForPurge :one
+UPDATE captures SET doc = '{}'::jsonb, metadata = '{}'::jsonb, env = '{}'::jsonb
+WHERE id = $1 RETURNING id, workspace_id, project_id, source, state, fidelity, created_at, epoch, env, metadata, doc, withheld_event_count, revision, manifest_complete, applied_ruleset_version
+`
+
+// Step blobs-deleted -> purged's metadata half. The captures row itself
+// cannot be deleted outright: capture_events/comments/mutations reference
+// it by FK and are append-only by trigger (Task 3), so they can never be
+// removed to clear the way for a parent delete — that immutability is
+// deliberate (see 00002_schema.sql), not an oversight this task works
+// around. Instead the disclosable content columns are wiped in place,
+// which is what actually carries redaction/PHI risk; the row itself
+// persists, permanently non-ready, as its own tombstone.
+func (q *Queries) ClearCaptureContentForPurge(ctx context.Context, id string) (Capture, error) {
+	row := q.db.QueryRow(ctx, clearCaptureContentForPurge, id)
+	var i Capture
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.Source,
+		&i.State,
+		&i.Fidelity,
+		&i.CreatedAt,
+		&i.Epoch,
+		&i.Env,
+		&i.Metadata,
+		&i.Doc,
+		&i.WithheldEventCount,
+		&i.Revision,
+		&i.ManifestComplete,
+		&i.AppliedRulesetVersion,
+	)
+	return i, err
+}
+
 const consumeAssetUploadPresign = `-- name: ConsumeAssetUploadPresign :one
 UPDATE asset_upload_presigns SET consumed_at = now()
 WHERE object_key = $1 AND consumed_at IS NULL
@@ -449,6 +485,39 @@ func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (P
 	return i, err
 }
 
+const createPurgeJobIfAbsent = `-- name: CreatePurgeJobIfAbsent :one
+INSERT INTO purge_jobs (id, capture_id, workspace_id)
+VALUES ($1, $2, $3)
+ON CONFLICT (capture_id) DO NOTHING
+RETURNING id, capture_id, workspace_id, state, object_keys, created_at, updated_at
+`
+
+type CreatePurgeJobIfAbsentParams struct {
+	ID          string `json:"id"`
+	CaptureID   string `json:"capture_id"`
+	WorkspaceID string `json:"workspace_id"`
+}
+
+// ON CONFLICT DO NOTHING on the capture_id UNIQUE constraint makes the
+// sweep that creates pending jobs idempotent: running it twice against the
+// same expired capture creates exactly one job. sqlc's :one returns
+// pgx.ErrNoRows when the conflict fires with nothing to return, which
+// callers read as "a job already exists for this capture".
+func (q *Queries) CreatePurgeJobIfAbsent(ctx context.Context, arg CreatePurgeJobIfAbsentParams) (PurgeJob, error) {
+	row := q.db.QueryRow(ctx, createPurgeJobIfAbsent, arg.ID, arg.CaptureID, arg.WorkspaceID)
+	var i PurgeJob
+	err := row.Scan(
+		&i.ID,
+		&i.CaptureID,
+		&i.WorkspaceID,
+		&i.State,
+		&i.ObjectKeys,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const createRedactionAuditFinding = `-- name: CreateRedactionAuditFinding :one
 INSERT INTO redaction_audit_findings (
     id, capture_id, workspace_id, applied_ruleset_version,
@@ -587,6 +656,18 @@ func (q *Queries) CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams
 		&i.PolicyOverrides,
 	)
 	return i, err
+}
+
+const deleteAssetsForCapture = `-- name: DeleteAssetsForCapture :execrows
+DELETE FROM assets WHERE capture_id = $1
+`
+
+func (q *Queries) DeleteAssetsForCapture(ctx context.Context, captureID string) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteAssetsForCapture, captureID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteProjectForWorkspace = `-- name: DeleteProjectForWorkspace :execrows
@@ -982,6 +1063,44 @@ func (q *Queries) GetProjectForWorkspace(ctx context.Context, arg GetProjectForW
 	return i, err
 }
 
+const getPurgeJob = `-- name: GetPurgeJob :one
+SELECT id, capture_id, workspace_id, state, object_keys, created_at, updated_at FROM purge_jobs WHERE id = $1
+`
+
+func (q *Queries) GetPurgeJob(ctx context.Context, id string) (PurgeJob, error) {
+	row := q.db.QueryRow(ctx, getPurgeJob, id)
+	var i PurgeJob
+	err := row.Scan(
+		&i.ID,
+		&i.CaptureID,
+		&i.WorkspaceID,
+		&i.State,
+		&i.ObjectKeys,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getPurgeJobByCapture = `-- name: GetPurgeJobByCapture :one
+SELECT id, capture_id, workspace_id, state, object_keys, created_at, updated_at FROM purge_jobs WHERE capture_id = $1
+`
+
+func (q *Queries) GetPurgeJobByCapture(ctx context.Context, captureID string) (PurgeJob, error) {
+	row := q.db.QueryRow(ctx, getPurgeJobByCapture, captureID)
+	var i PurgeJob
+	err := row.Scan(
+		&i.ID,
+		&i.CaptureID,
+		&i.WorkspaceID,
+		&i.State,
+		&i.ObjectKeys,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getRedactionRuleset = `-- name: GetRedactionRuleset :one
 SELECT version, workspace_id, rules, created_at FROM redaction_rulesets WHERE version = $1
 `
@@ -1122,6 +1241,56 @@ func (q *Queries) InsertMutationIfNew(ctx context.Context, arg InsertMutationIfN
 	return i, err
 }
 
+const listAllAssetObjectKeys = `-- name: ListAllAssetObjectKeys :many
+SELECT object_key FROM assets
+`
+
+// The orphan detector's "live" half: every object key any surviving asset
+// row still points at.
+func (q *Queries) ListAllAssetObjectKeys(ctx context.Context) ([]string, error) {
+	rows, err := q.db.Query(ctx, listAllAssetObjectKeys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var object_key string
+		if err := rows.Scan(&object_key); err != nil {
+			return nil, err
+		}
+		items = append(items, object_key)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAssetObjectKeysByCapture = `-- name: ListAssetObjectKeysByCapture :many
+SELECT object_key FROM assets WHERE capture_id = $1
+`
+
+func (q *Queries) ListAssetObjectKeysByCapture(ctx context.Context, captureID string) ([]string, error) {
+	rows, err := q.db.Query(ctx, listAssetObjectKeysByCapture, captureID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var object_key string
+		if err := rows.Scan(&object_key); err != nil {
+			return nil, err
+		}
+		items = append(items, object_key)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listCaptureEventsByCapture = `-- name: ListCaptureEventsByCapture :many
 SELECT id, capture_id, t, kind, payload, redaction, created_at FROM capture_events WHERE capture_id = $1 ORDER BY t ASC
 `
@@ -1160,6 +1329,62 @@ SELECT id, workspace_id, project_id, source, state, fidelity, created_at, epoch,
 
 func (q *Queries) ListCapturesByWorkspace(ctx context.Context, workspaceID string) ([]Capture, error) {
 	rows, err := q.db.Query(ctx, listCapturesByWorkspace, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Capture
+	for rows.Next() {
+		var i Capture
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.ProjectID,
+			&i.Source,
+			&i.State,
+			&i.Fidelity,
+			&i.CreatedAt,
+			&i.Epoch,
+			&i.Env,
+			&i.Metadata,
+			&i.Doc,
+			&i.WithheldEventCount,
+			&i.Revision,
+			&i.ManifestComplete,
+			&i.AppliedRulesetVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCapturesPastRetention = `-- name: ListCapturesPastRetention :many
+
+SELECT id, workspace_id, project_id, source, state, fidelity, created_at, epoch, env, metadata, doc, withheld_event_count, revision, manifest_complete, applied_ruleset_version FROM captures
+WHERE workspace_id = $1 AND state = 'ready' AND created_at <= $2::timestamptz
+ORDER BY created_at
+`
+
+type ListCapturesPastRetentionParams struct {
+	WorkspaceID string             `json:"workspace_id"`
+	Threshold   pgtype.Timestamptz `json:"threshold"`
+}
+
+// Task 13: the purge state machine's persistence. A purge_jobs row is
+// created once a ready capture passes its retention window and advances
+// through pending -> tombstoned -> blobs-deleting -> blobs-deleted ->
+// purged; see services/purge-job/internal/purge.
+// Every ready capture in workspace_id created at or before threshold —
+// threshold is computed in Go from the workspace's resolved policy
+// (policy.Resolve(...).RetentionDays), since retention resolution is a
+// pure Go function, not something to duplicate in SQL.
+func (q *Queries) ListCapturesPastRetention(ctx context.Context, arg ListCapturesPastRetentionParams) ([]Capture, error) {
+	rows, err := q.db.Query(ctx, listCapturesPastRetention, arg.WorkspaceID, arg.Threshold)
 	if err != nil {
 		return nil, err
 	}
@@ -1259,6 +1484,68 @@ func (q *Queries) ListProjectsByWorkspace(ctx context.Context, workspaceID strin
 			&i.WorkspaceID,
 			&i.Name,
 			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPurgeJobObjectKeys = `-- name: ListPurgeJobObjectKeys :many
+SELECT object_keys FROM purge_jobs
+`
+
+// Every object key any purge job (at any state, including purged — job
+// rows are retained briefly as completion evidence) has ever recorded as
+// belonging to a capture being purged. Part of the orphan detector's
+// "referenced" set alongside ListAllAssetObjectKeys.
+func (q *Queries) ListPurgeJobObjectKeys(ctx context.Context) ([][]byte, error) {
+	rows, err := q.db.Query(ctx, listPurgeJobObjectKeys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items [][]byte
+	for rows.Next() {
+		var object_keys []byte
+		if err := rows.Scan(&object_keys); err != nil {
+			return nil, err
+		}
+		items = append(items, object_keys)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPurgeJobsNotPurged = `-- name: ListPurgeJobsNotPurged :many
+SELECT id, capture_id, workspace_id, state, object_keys, created_at, updated_at FROM purge_jobs WHERE state != 'purged' ORDER BY created_at
+`
+
+// The reconciliation sweep's resume list: every job stuck short of the
+// terminal state, regardless of how long ago it last advanced.
+func (q *Queries) ListPurgeJobsNotPurged(ctx context.Context) ([]PurgeJob, error) {
+	rows, err := q.db.Query(ctx, listPurgeJobsNotPurged)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PurgeJob
+	for rows.Next() {
+		var i PurgeJob
+		if err := rows.Scan(
+			&i.ID,
+			&i.CaptureID,
+			&i.WorkspaceID,
+			&i.State,
+			&i.ObjectKeys,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -1506,6 +1793,92 @@ type SetCaptureManifestCompleteParams struct {
 
 func (q *Queries) SetCaptureManifestComplete(ctx context.Context, arg SetCaptureManifestCompleteParams) (Capture, error) {
 	row := q.db.QueryRow(ctx, setCaptureManifestComplete, arg.ID, arg.ManifestComplete)
+	var i Capture
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.Source,
+		&i.State,
+		&i.Fidelity,
+		&i.CreatedAt,
+		&i.Epoch,
+		&i.Env,
+		&i.Metadata,
+		&i.Doc,
+		&i.WithheldEventCount,
+		&i.Revision,
+		&i.ManifestComplete,
+		&i.AppliedRulesetVersion,
+	)
+	return i, err
+}
+
+const setPurgeJobObjectKeysAndState = `-- name: SetPurgeJobObjectKeysAndState :one
+UPDATE purge_jobs SET object_keys = $2, state = $3, updated_at = now() WHERE id = $1 RETURNING id, capture_id, workspace_id, state, object_keys, created_at, updated_at
+`
+
+type SetPurgeJobObjectKeysAndStateParams struct {
+	ID         string `json:"id"`
+	ObjectKeys []byte `json:"object_keys"`
+	State      string `json:"state"`
+}
+
+// Step tombstoned -> blobs-deleting: records exactly which object keys must
+// be deleted before flipping state, so a resume at blobs-deleting reads
+// the keys back from here rather than re-deriving them from assets (which
+// may already be gone by the time of a resume attempted after purged).
+func (q *Queries) SetPurgeJobObjectKeysAndState(ctx context.Context, arg SetPurgeJobObjectKeysAndStateParams) (PurgeJob, error) {
+	row := q.db.QueryRow(ctx, setPurgeJobObjectKeysAndState, arg.ID, arg.ObjectKeys, arg.State)
+	var i PurgeJob
+	err := row.Scan(
+		&i.ID,
+		&i.CaptureID,
+		&i.WorkspaceID,
+		&i.State,
+		&i.ObjectKeys,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const setPurgeJobState = `-- name: SetPurgeJobState :one
+UPDATE purge_jobs SET state = $2, updated_at = now() WHERE id = $1 RETURNING id, capture_id, workspace_id, state, object_keys, created_at, updated_at
+`
+
+type SetPurgeJobStateParams struct {
+	ID    string `json:"id"`
+	State string `json:"state"`
+}
+
+func (q *Queries) SetPurgeJobState(ctx context.Context, arg SetPurgeJobStateParams) (PurgeJob, error) {
+	row := q.db.QueryRow(ctx, setPurgeJobState, arg.ID, arg.State)
+	var i PurgeJob
+	err := row.Scan(
+		&i.ID,
+		&i.CaptureID,
+		&i.WorkspaceID,
+		&i.State,
+		&i.ObjectKeys,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const tombstoneCaptureForPurge = `-- name: TombstoneCaptureForPurge :one
+UPDATE captures SET state = 'expired' WHERE id = $1 RETURNING id, workspace_id, project_id, source, state, fidelity, created_at, epoch, env, metadata, doc, withheld_event_count, revision, manifest_complete, applied_ruleset_version
+`
+
+// Step pending -> tombstoned's capture-side half: flips state to 'expired'
+// (spec: "retention window elapsed; assets purged"), which immediately
+// makes gateCapture/gateCaptureEvents/the share resolver treat it as
+// non-disclosable — invariant 1's "the gate is state === 'ready'" already
+// covers 'expired' for free, so tombstoning needs no separate check
+// anywhere else.
+func (q *Queries) TombstoneCaptureForPurge(ctx context.Context, id string) (Capture, error) {
+	row := q.db.QueryRow(ctx, tombstoneCaptureForPurge, id)
 	var i Capture
 	err := row.Scan(
 		&i.ID,

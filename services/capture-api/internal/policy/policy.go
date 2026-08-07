@@ -3,6 +3,8 @@
 // hardcoded defaults. Pure functions only — no I/O.
 package policy
 
+import "errors"
+
 // Policy is the effective, fully-resolved set of workspace-level caps and
 // settings a workspace operates under.
 type Policy struct {
@@ -28,14 +30,35 @@ type Policy struct {
 //     workspace names one.
 //   - OriginAllowList defaults empty, meaning "same-origin only" — the
 //     most restrictive interpretation absent an explicit allow-list.
-//   - RetentionDays defaults to 90.
+//   - RetentionDays has deliberately NO default (spec §22 open question 4):
+//     how long PHI-adjacent capture data is retained is a compliance
+//     judgment Security/Compliance must make per workspace, not a number an
+//     engineer picks in code. Resolve does not fill it in, and Validate
+//     rejects a resolved Policy that lacks one — see the workspace-creation
+//     path (capture-api/internal/api.createWorkspace), which is the one
+//     place callers must supply it before a workspace can exist at all.
 var Defaults = Policy{
 	StorageCapBytes:  2 * 1024 * 1024 * 1024,
 	CaptureCap:       40,
 	LLMProviderChain: []string{},
 	LocalOnly:        true,
 	OriginAllowList:  []string{},
-	RetentionDays:    90,
+}
+
+// ErrRetentionRequired is returned by Validate when a resolved Policy has
+// no positive RetentionDays — i.e. no override was ever supplied, so the
+// (deliberately absent) code default of 0 survived resolution.
+var ErrRetentionRequired = errors.New("policy: retentionDays is required and must be positive")
+
+// Validate rejects a resolved Policy that has no explicitly chosen
+// RetentionDays. Called at workspace creation (the one place a workspace
+// starts existing) so a workspace can never begin life without
+// Security/Compliance having chosen a retention window.
+func (p Policy) Validate() error {
+	if p.RetentionDays <= 0 {
+		return ErrRetentionRequired
+	}
+	return nil
 }
 
 // Overrides is a partial override of Policy, as stored in

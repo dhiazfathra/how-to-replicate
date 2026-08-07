@@ -128,6 +128,16 @@ type Project struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type PurgeJob struct {
+	ID          string             `json:"id"`
+	CaptureID   string             `json:"capture_id"`
+	WorkspaceID string             `json:"workspace_id"`
+	State       string             `json:"state"`
+	ObjectKeys  []byte             `json:"object_keys"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
+}
+
 type RedactionAuditFinding struct {
 	ID                       string             `json:"id"`
 	CaptureID                string             `json:"capture_id"`

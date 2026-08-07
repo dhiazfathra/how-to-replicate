@@ -285,3 +285,88 @@ INSERT INTO redaction_audit_findings (
 
 -- name: ListRedactionAuditFindingsByCapture :many
 SELECT * FROM redaction_audit_findings WHERE capture_id = $1 ORDER BY created_at;
+
+-- Task 13: the purge state machine's persistence. A purge_jobs row is
+-- created once a ready capture passes its retention window and advances
+-- through pending -> tombstoned -> blobs-deleting -> blobs-deleted ->
+-- purged; see services/purge-job/internal/purge.
+
+-- name: ListCapturesPastRetention :many
+-- Every ready capture in workspace_id created at or before threshold —
+-- threshold is computed in Go from the workspace's resolved policy
+-- (policy.Resolve(...).RetentionDays), since retention resolution is a
+-- pure Go function, not something to duplicate in SQL.
+SELECT * FROM captures
+WHERE workspace_id = $1 AND state = 'ready' AND created_at <= sqlc.arg(threshold)::timestamptz
+ORDER BY created_at;
+
+-- name: CreatePurgeJobIfAbsent :one
+-- ON CONFLICT DO NOTHING on the capture_id UNIQUE constraint makes the
+-- sweep that creates pending jobs idempotent: running it twice against the
+-- same expired capture creates exactly one job. sqlc's :one returns
+-- pgx.ErrNoRows when the conflict fires with nothing to return, which
+-- callers read as "a job already exists for this capture".
+INSERT INTO purge_jobs (id, capture_id, workspace_id)
+VALUES ($1, $2, $3)
+ON CONFLICT (capture_id) DO NOTHING
+RETURNING *;
+
+-- name: GetPurgeJob :one
+SELECT * FROM purge_jobs WHERE id = $1;
+
+-- name: GetPurgeJobByCapture :one
+SELECT * FROM purge_jobs WHERE capture_id = $1;
+
+-- name: ListPurgeJobsNotPurged :many
+-- The reconciliation sweep's resume list: every job stuck short of the
+-- terminal state, regardless of how long ago it last advanced.
+SELECT * FROM purge_jobs WHERE state != 'purged' ORDER BY created_at;
+
+-- name: ListPurgeJobObjectKeys :many
+-- Every object key any purge job (at any state, including purged — job
+-- rows are retained briefly as completion evidence) has ever recorded as
+-- belonging to a capture being purged. Part of the orphan detector's
+-- "referenced" set alongside ListAllAssetObjectKeys.
+SELECT object_keys FROM purge_jobs;
+
+-- name: TombstoneCaptureForPurge :one
+-- Step pending -> tombstoned's capture-side half: flips state to 'expired'
+-- (spec: "retention window elapsed; assets purged"), which immediately
+-- makes gateCapture/gateCaptureEvents/the share resolver treat it as
+-- non-disclosable — invariant 1's "the gate is state === 'ready'" already
+-- covers 'expired' for free, so tombstoning needs no separate check
+-- anywhere else.
+UPDATE captures SET state = 'expired' WHERE id = $1 RETURNING *;
+
+-- name: SetPurgeJobState :one
+UPDATE purge_jobs SET state = $2, updated_at = now() WHERE id = $1 RETURNING *;
+
+-- name: SetPurgeJobObjectKeysAndState :one
+-- Step tombstoned -> blobs-deleting: records exactly which object keys must
+-- be deleted before flipping state, so a resume at blobs-deleting reads
+-- the keys back from here rather than re-deriving them from assets (which
+-- may already be gone by the time of a resume attempted after purged).
+UPDATE purge_jobs SET object_keys = $2, state = $3, updated_at = now() WHERE id = $1 RETURNING *;
+
+-- name: ListAssetObjectKeysByCapture :many
+SELECT object_key FROM assets WHERE capture_id = $1;
+
+-- name: ListAllAssetObjectKeys :many
+-- The orphan detector's "live" half: every object key any surviving asset
+-- row still points at.
+SELECT object_key FROM assets;
+
+-- name: DeleteAssetsForCapture :execrows
+DELETE FROM assets WHERE capture_id = $1;
+
+-- name: ClearCaptureContentForPurge :one
+-- Step blobs-deleted -> purged's metadata half. The captures row itself
+-- cannot be deleted outright: capture_events/comments/mutations reference
+-- it by FK and are append-only by trigger (Task 3), so they can never be
+-- removed to clear the way for a parent delete — that immutability is
+-- deliberate (see 00002_schema.sql), not an oversight this task works
+-- around. Instead the disclosable content columns are wiped in place,
+-- which is what actually carries redaction/PHI risk; the row itself
+-- persists, permanently non-ready, as its own tombstone.
+UPDATE captures SET doc = '{}'::jsonb, metadata = '{}'::jsonb, env = '{}'::jsonb
+WHERE id = $1 RETURNING *;

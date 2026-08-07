@@ -71,6 +71,73 @@ func TestClient_PresignPutStatDelete_AgainstRealMinIO(t *testing.T) {
 	}
 }
 
+func TestClient_ListKeys_AgainstRealMinIO(t *testing.T) {
+	ctx := context.Background()
+	creds := testsupport.MinIO(t, ctx)
+	endpoint := strings.TrimPrefix(strings.TrimPrefix(creds.Endpoint, "http://"), "https://")
+
+	mc, err := minio.New(endpoint, &minio.Options{
+		Creds: credentials.NewStaticV4(creds.AccessKey, creds.SecretKey, ""),
+	})
+	if err != nil {
+		t.Fatalf("new minio client: %v", err)
+	}
+
+	const bucket = "htr-listkeys-bucket"
+	if err := mc.MakeBucket(ctx, bucket, minio.MakeBucketOptions{}); err != nil {
+		t.Fatalf("make bucket: %v", err)
+	}
+	c, err := New(mc, bucket)
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	// An empty bucket lists no keys — the purge pipeline's orphan detector
+	// depends on this returning an empty (not error) result rather than
+	// treating "nothing here" as a failure.
+	keys, err := c.ListKeys(ctx, "")
+	if err != nil {
+		t.Fatalf("list keys (empty bucket): %v", err)
+	}
+	if len(keys) != 0 {
+		t.Fatalf("keys = %v, want none in an empty bucket", keys)
+	}
+
+	for _, key := range []string{"captures/a/video.webm", "captures/b/screenshot.png", "other/unrelated.txt"} {
+		if _, err := mc.PutObject(ctx, bucket, key, strings.NewReader("x"), 1, minio.PutObjectOptions{}); err != nil {
+			t.Fatalf("seed object %s: %v", key, err)
+		}
+	}
+
+	all, err := c.ListKeys(ctx, "")
+	if err != nil {
+		t.Fatalf("list keys (no prefix): %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("keys = %v, want 3", all)
+	}
+
+	captures, err := c.ListKeys(ctx, "captures/")
+	if err != nil {
+		t.Fatalf("list keys (prefix): %v", err)
+	}
+	if len(captures) != 2 {
+		t.Fatalf("keys under captures/ = %v, want 2", captures)
+	}
+
+	// A client pointed at a bucket that doesn't exist surfaces the
+	// underlying listing error rather than an empty, misleadingly
+	// successful result — important for the orphan detector, which must
+	// not read "bucket unreachable" as "bucket empty".
+	missing, err := New(mc, "htr-listkeys-bucket-does-not-exist")
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	if _, err := missing.ListKeys(ctx, ""); err == nil {
+		t.Fatal("expected error listing keys in a nonexistent bucket")
+	}
+}
+
 func TestClient_EnsureHardenedBucket_AgainstRealMinIO(t *testing.T) {
 	ctx := context.Background()
 	creds := testsupport.MinIO(t, ctx)

@@ -9,6 +9,15 @@ import (
 )
 
 type Querier interface {
+	// Step blobs-deleted -> purged's metadata half. The captures row itself
+	// cannot be deleted outright: capture_events/comments/mutations reference
+	// it by FK and are append-only by trigger (Task 3), so they can never be
+	// removed to clear the way for a parent delete — that immutability is
+	// deliberate (see 00002_schema.sql), not an oversight this task works
+	// around. Instead the disclosable content columns are wiped in place,
+	// which is what actually carries redaction/PHI risk; the row itself
+	// persists, permanently non-ready, as its own tombstone.
+	ClearCaptureContentForPurge(ctx context.Context, id string) (Capture, error)
 	// Flips consumed_at exactly once. ON conflict with an already-consumed row
 	// the WHERE clause excludes it, so sqlc's :one returns pgx.ErrNoRows —
 	// callers read that as "already consumed, refuse" without a second query.
@@ -32,11 +41,18 @@ type Querier interface {
 	CreateMutation(ctx context.Context, arg CreateMutationParams) (Mutation, error)
 	CreateOutboxEntry(ctx context.Context, arg CreateOutboxEntryParams) (Outbox, error)
 	CreateProject(ctx context.Context, arg CreateProjectParams) (Project, error)
+	// ON CONFLICT DO NOTHING on the capture_id UNIQUE constraint makes the
+	// sweep that creates pending jobs idempotent: running it twice against the
+	// same expired capture creates exactly one job. sqlc's :one returns
+	// pgx.ErrNoRows when the conflict fires with nothing to return, which
+	// callers read as "a job already exists for this capture".
+	CreatePurgeJobIfAbsent(ctx context.Context, arg CreatePurgeJobIfAbsentParams) (PurgeJob, error)
 	CreateRedactionAuditFinding(ctx context.Context, arg CreateRedactionAuditFindingParams) (RedactionAuditFinding, error)
 	CreateRedactionRuleset(ctx context.Context, arg CreateRedactionRulesetParams) (RedactionRuleset, error)
 	CreateShareLink(ctx context.Context, arg CreateShareLinkParams) (ShareLink, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
 	CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams) (Workspace, error)
+	DeleteAssetsForCapture(ctx context.Context, captureID string) (int64, error)
 	DeleteProjectForWorkspace(ctx context.Context, arg DeleteProjectForWorkspaceParams) (int64, error)
 	DeleteWorkspace(ctx context.Context, id string) error
 	GetAsset(ctx context.Context, id string) (Asset, error)
@@ -69,6 +85,8 @@ type Querier interface {
 	// returns pgx.ErrNoRows rather than another workspace's data — the
 	// non-disclosing cross-workspace read.
 	GetProjectForWorkspace(ctx context.Context, arg GetProjectForWorkspaceParams) (Project, error)
+	GetPurgeJob(ctx context.Context, id string) (PurgeJob, error)
+	GetPurgeJobByCapture(ctx context.Context, captureID string) (PurgeJob, error)
 	GetRedactionRuleset(ctx context.Context, version int32) (RedactionRuleset, error)
 	GetShareLink(ctx context.Context, id string) (ShareLink, error)
 	GetUser(ctx context.Context, id string) (User, error)
@@ -86,8 +104,21 @@ type Querier interface {
 	// stamped here (Task 6) so PullDeltas can filter the delta log without a
 	// join back to captures.
 	InsertMutationIfNew(ctx context.Context, arg InsertMutationIfNewParams) (Mutation, error)
+	// The orphan detector's "live" half: every object key any surviving asset
+	// row still points at.
+	ListAllAssetObjectKeys(ctx context.Context) ([]string, error)
+	ListAssetObjectKeysByCapture(ctx context.Context, captureID string) ([]string, error)
 	ListCaptureEventsByCapture(ctx context.Context, captureID string) ([]CaptureEvent, error)
 	ListCapturesByWorkspace(ctx context.Context, workspaceID string) ([]Capture, error)
+	// Task 13: the purge state machine's persistence. A purge_jobs row is
+	// created once a ready capture passes its retention window and advances
+	// through pending -> tombstoned -> blobs-deleting -> blobs-deleted ->
+	// purged; see services/purge-job/internal/purge.
+	// Every ready capture in workspace_id created at or before threshold —
+	// threshold is computed in Go from the workspace's resolved policy
+	// (policy.Resolve(...).RetentionDays), since retention resolution is a
+	// pure Go function, not something to duplicate in SQL.
+	ListCapturesPastRetention(ctx context.Context, arg ListCapturesPastRetentionParams) ([]Capture, error)
 	// Task 6's delta log: every mutation applied in workspace_id with seq >
 	// since, ordered by seq so a client resumes exactly where it left off
 	// regardless of which capture each mutation touched. limit is passed as
@@ -95,6 +126,14 @@ type Querier interface {
 	// second COUNT query.
 	ListMutationsSinceRevision(ctx context.Context, arg ListMutationsSinceRevisionParams) ([]Mutation, error)
 	ListProjectsByWorkspace(ctx context.Context, workspaceID string) ([]Project, error)
+	// Every object key any purge job (at any state, including purged — job
+	// rows are retained briefly as completion evidence) has ever recorded as
+	// belonging to a capture being purged. Part of the orphan detector's
+	// "referenced" set alongside ListAllAssetObjectKeys.
+	ListPurgeJobObjectKeys(ctx context.Context) ([][]byte, error)
+	// The reconciliation sweep's resume list: every job stuck short of the
+	// terminal state, regardless of how long ago it last advanced.
+	ListPurgeJobsNotPurged(ctx context.Context) ([]PurgeJob, error)
 	// redaction-audit's poll source: only "ready" captures have crossed the
 	// gate (invariant 1) and are worth re-checking; nothing earlier in the
 	// pipeline has finished redacting yet.
@@ -115,6 +154,19 @@ type Querier interface {
 	MarkAssetVerified(ctx context.Context, arg MarkAssetVerifiedParams) (Asset, error)
 	RevokeShareLink(ctx context.Context, id string) (ShareLink, error)
 	SetCaptureManifestComplete(ctx context.Context, arg SetCaptureManifestCompleteParams) (Capture, error)
+	// Step tombstoned -> blobs-deleting: records exactly which object keys must
+	// be deleted before flipping state, so a resume at blobs-deleting reads
+	// the keys back from here rather than re-deriving them from assets (which
+	// may already be gone by the time of a resume attempted after purged).
+	SetPurgeJobObjectKeysAndState(ctx context.Context, arg SetPurgeJobObjectKeysAndStateParams) (PurgeJob, error)
+	SetPurgeJobState(ctx context.Context, arg SetPurgeJobStateParams) (PurgeJob, error)
+	// Step pending -> tombstoned's capture-side half: flips state to 'expired'
+	// (spec: "retention window elapsed; assets purged"), which immediately
+	// makes gateCapture/gateCaptureEvents/the share resolver treat it as
+	// non-disclosable — invariant 1's "the gate is state === 'ready'" already
+	// covers 'expired' for free, so tombstoning needs no separate check
+	// anywhere else.
+	TombstoneCaptureForPurge(ctx context.Context, id string) (Capture, error)
 	UpdateCaptureRevisionAndDoc(ctx context.Context, arg UpdateCaptureRevisionAndDocParams) (Capture, error)
 	UpdateProjectForWorkspace(ctx context.Context, arg UpdateProjectForWorkspaceParams) (Project, error)
 	UpdateWorkspace(ctx context.Context, arg UpdateWorkspaceParams) (Workspace, error)

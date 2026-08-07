@@ -56,7 +56,7 @@ func TestCreateWorkspace_Success_Integration(t *testing.T) {
 	}
 
 	h := &handlers{store: st, pool: pool}
-	r := httptest.NewRequest(http.MethodPost, "/v1/workspaces", strings.NewReader(`{"name":"Acme"}`))
+	r := httptest.NewRequest(http.MethodPost, "/v1/workspaces", strings.NewReader(`{"name":"Acme","retentionDays":90}`))
 	r = r.WithContext(auth.WithSubject(r.Context(), "user-int"))
 	rec := httptest.NewRecorder()
 

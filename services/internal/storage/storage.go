@@ -199,7 +199,10 @@ func (c *Client) Stat(ctx context.Context, key string) (minio.ObjectInfo, error)
 }
 
 // Delete removes the object at key. Deleting a nonexistent key is not an
-// error, matching S3 semantics.
+// error, matching S3 semantics — this is what makes the purge state
+// machine's blob-delete step (services/purge-job) safely retryable: a
+// resumed job re-issuing a delete for a key some earlier attempt already
+// removed sees success, not a failure that would stall the job.
 func (c *Client) Delete(ctx context.Context, key string) error {
 	key, err := objectKey(key)
 	if err != nil {
@@ -210,4 +213,19 @@ func (c *Client) Delete(ctx context.Context, key string) error {
 		return fmt.Errorf("storage: delete %q: %w", key, err)
 	}
 	return nil
+}
+
+// ListKeys returns every object key currently in the bucket under prefix
+// (pass "" for the whole bucket). It exists for the purge job's orphan
+// detector, which has no other way to ask "what actually exists in object
+// storage" independent of what Postgres believes exists.
+func (c *Client) ListKeys(ctx context.Context, prefix string) ([]string, error) {
+	var keys []string
+	for obj := range c.inner.ListObjects(ctx, c.bucket, minio.ListObjectsOptions{Prefix: prefix, Recursive: true}) {
+		if obj.Err != nil {
+			return nil, fmt.Errorf("storage: list keys: %w", obj.Err)
+		}
+		keys = append(keys, obj.Key)
+	}
+	return keys, nil
 }

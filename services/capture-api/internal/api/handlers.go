@@ -15,6 +15,11 @@ import (
 
 type workspaceRequest struct {
 	Name string `json:"name"`
+	// RetentionDays is required: policy.Defaults has deliberately no
+	// retention default (spec §22 open question 4 — the retention window
+	// is a Security/Compliance judgment, not an engineering one), so a
+	// workspace cannot come into existence without one being chosen here.
+	RetentionDays int `json:"retentionDays"`
 }
 
 type projectRequest struct {
@@ -39,7 +44,17 @@ func (h *handlers) createWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ws, err := store.CreateWorkspaceWithOwner(r.Context(), h.pool, newID(), req.Name, newID(), subject)
+	overrides := policy.Overrides{RetentionDays: &req.RetentionDays}
+	if err := policy.Resolve(policy.Defaults, overrides).Validate(); err != nil {
+		http.Error(w, "invalid request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	// policy.Overrides is a plain struct of pointers/slices to JSON-safe
+	// scalars — Marshal on it cannot fail, same reasoning as updatePolicy
+	// below.
+	overridesJSON, _ := json.Marshal(overrides)
+
+	ws, err := store.CreateWorkspaceWithOwner(r.Context(), h.pool, newID(), req.Name, newID(), subject, overridesJSON)
 	if err != nil {
 		handleStoreErr(w, r, err)
 		return
@@ -208,7 +223,9 @@ func (h *handlers) updatePolicy(w http.ResponseWriter, r *http.Request) {
 // the one place invariant 1 ("no unredacted capture is viewable... the gate
 // is state === 'ready'") is enforced.
 func (h *handlers) getCapture(w http.ResponseWriter, r *http.Request) {
-	c, err := h.store.GetCapture(r.Context(), chi.URLParam(r, "captureID"), chi.URLParam(r, "workspaceID"))
+	subject, _ := auth.Subject(r.Context())
+	c, err := h.store.GetCaptureAndAudit(r.Context(),
+		chi.URLParam(r, "captureID"), chi.URLParam(r, "workspaceID"), subject, newID())
 	if err != nil {
 		handleStoreErr(w, r, err)
 		return

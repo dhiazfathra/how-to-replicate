@@ -88,7 +88,7 @@ proto/                Buf module — API schema, generated Go checked in under p
 services/             Go workspace (Phase 1+)
   internal/           shared packages: db, migrate, otel, httpx, storage, authz, testsupport
   sync-gateway/       mutation intake, revisions, LWW, delta pull, WS fan-out (Tasks 4/6)
-  capture-api/        workspace/project CRUD, capture reads, comments, share links (Tasks 10/11)
+  capture-api/        workspace/project CRUD, capture reads, comments, share links, retention + purge state machine, audit log (Tasks 10/11/13)
   redaction-audit/    server-side redaction alarm — re-checks synced captures, alerts, never redacts (Task 12)
 docs/
   decisions/          ADRs

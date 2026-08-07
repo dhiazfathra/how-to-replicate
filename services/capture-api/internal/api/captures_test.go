@@ -126,6 +126,41 @@ func TestGetCapture_ReadyReturnsFullContent(t *testing.T) {
 	}
 }
 
+func TestGetCapture_WritesExactlyOneAuditEntry(t *testing.T) {
+	c := readyCapture(captureReadyState)
+	count := 0
+	h := newTestHandlers(fakeQuerier{capture: c, captureOK: true, auditLogCount: &count})
+
+	r := httptest.NewRequest(http.MethodGet, "/v1/workspaces/ws_1/captures/cap_1", nil)
+	r = withSubject(r, "user-1")
+	r = withChiParams(r, map[string]string{"workspaceID": "ws_1", "captureID": "cap_1"})
+	rec := httptest.NewRecorder()
+
+	h.getCapture(rec, r)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if count != 1 {
+		t.Fatalf("audit log count = %d, want exactly 1", count)
+	}
+}
+
+func TestGetCapture_AuditLogWriteFails(t *testing.T) {
+	c := readyCapture(captureReadyState)
+	h := newTestHandlers(fakeQuerier{capture: c, captureOK: true, auditErr: errBoom})
+
+	r := httptest.NewRequest(http.MethodGet, "/v1/workspaces/ws_1/captures/cap_1", nil)
+	r = withChiParams(r, map[string]string{"workspaceID": "ws_1", "captureID": "cap_1"})
+	rec := httptest.NewRecorder()
+
+	h.getCapture(rec, r)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+}
+
 func TestGetCapture_NotFound(t *testing.T) {
 	h := newTestHandlers(fakeQuerier{captureOK: false})
 	r := httptest.NewRequest(http.MethodGet, "/v1/workspaces/ws_1/captures/cap_1", nil)

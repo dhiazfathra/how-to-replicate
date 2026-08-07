@@ -98,15 +98,25 @@ func (s *Store) SetPolicyOverrides(ctx context.Context, workspaceID string, over
 	return ws, wrapNotFound(err)
 }
 
-// CreateWorkspaceWithOwner creates a workspace and grants ownerUserID the
-// owner membership in the same transaction, so a workspace is never
-// observable without at least one owner able to manage it.
-func CreateWorkspaceWithOwner(ctx context.Context, pool db.Pool, workspaceID, name, membershipID, ownerUserID string) (sqlcgen.Workspace, error) {
+// CreateWorkspaceWithOwner creates a workspace, stores its policy
+// overrides, and grants ownerUserID the owner membership — all in the same
+// transaction, so a workspace is never observable without at least one
+// owner able to manage it, and never observable without a retention window
+// already chosen (policyOverrides must resolve to a positive RetentionDays
+// per policy.Defaults having none — see internal/policy — but validating
+// the resolved value is the caller's job, since only the caller knows
+// policy.Defaults; this just stores whatever bytes it's given atomically
+// with creation).
+func CreateWorkspaceWithOwner(ctx context.Context, pool db.Pool, workspaceID, name, membershipID, ownerUserID string, policyOverrides []byte) (sqlcgen.Workspace, error) {
 	var ws sqlcgen.Workspace
 	err := db.WithTx(ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
 		s := New(sqlcgen.New(tx))
 		var err error
 		ws, err = s.CreateWorkspace(ctx, workspaceID, name)
+		if err != nil {
+			return err
+		}
+		ws, err = s.SetPolicyOverrides(ctx, workspaceID, policyOverrides)
 		if err != nil {
 			return err
 		}
@@ -283,6 +293,139 @@ func (s *Store) CreateAuditLog(ctx context.Context, id, workspaceID, actorID, ac
 		Details:     details,
 	})
 	return al, wrapNotFound(err)
+}
+
+// CreateCaptureAndAudit creates a capture and writes the "capture.create"
+// audit_log entry in the same transaction, so a capture can never exist
+// unaudited. There is no non-transactional CreateCapture wrapper in this
+// package on purpose: every write path that creates a capture must go
+// through this one, atomic, audited primitive.
+func CreateCaptureAndAudit(ctx context.Context, pool db.Pool, actorID string, arg sqlcgen.CreateCaptureParams) (sqlcgen.Capture, error) {
+	var c sqlcgen.Capture
+	err := db.WithTx(ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
+		s := New(sqlcgen.New(tx))
+		var err error
+		c, err = s.q.CreateCapture(ctx, arg)
+		if err != nil {
+			return wrapNotFound(err)
+		}
+		_, err = s.CreateAuditLog(ctx, "audit_"+arg.ID, arg.WorkspaceID, actorID, "capture.create", arg.ID, []byte("{}"))
+		return err
+	})
+	return c, err
+}
+
+// GetCaptureAndAudit reads a capture (workspace-scoped, same
+// no-existence-leak shape as GetCapture) and, on a successful read,
+// records exactly one "capture.access" audit_log entry — same
+// read-then-audit convention as the share-link resolver (share.go's
+// resolve): a plain SELECT has nothing else to roll back if the audit
+// write fails, so unlike the purge state machine's writes there is no
+// separate Postgres transaction here to fail atomically alongside, just a
+// 500 if the audit insert itself errors. auditID is caller-minted
+// (capture-api's newID), same convention as every other server-minted row
+// this package writes (CreateComment, etc).
+func (s *Store) GetCaptureAndAudit(ctx context.Context, id, workspaceID, actorID, auditID string) (sqlcgen.Capture, error) {
+	c, err := s.GetCapture(ctx, id, workspaceID)
+	if err != nil {
+		return sqlcgen.Capture{}, err
+	}
+	if _, err := s.CreateAuditLog(ctx, auditID, workspaceID, actorID, "capture.access", id, []byte("{}")); err != nil {
+		return sqlcgen.Capture{}, err
+	}
+	return c, nil
+}
+
+// TombstoneCaptureForPurge is the purge state machine's pending ->
+// tombstoned step (services/purge-job/internal/purge): it flips the
+// capture to 'expired' and the purge_jobs row to 'tombstoned', and writes
+// the "capture.delete.tombstoned" audit entry, all in one transaction.
+// This is the step the brief calls "everything user-visible is finished
+// here": the moment this commits, the capture is unreadable, unexportable,
+// and unshareable via the same state !== 'ready' gate every read path
+// already routes through — whatever happens to its blobs afterward is
+// reclamation, not a disclosure risk.
+func TombstoneCaptureForPurge(ctx context.Context, pool db.Pool, jobID, captureID, workspaceID string) (sqlcgen.PurgeJob, error) {
+	var job sqlcgen.PurgeJob
+	err := db.WithTx(ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
+		q := sqlcgen.New(tx)
+		if _, err := q.TombstoneCaptureForPurge(ctx, captureID); err != nil {
+			return fmt.Errorf("store: tombstone capture %s: %w", captureID, err)
+		}
+		var err error
+		job, err = q.SetPurgeJobState(ctx, sqlcgen.SetPurgeJobStateParams{ID: jobID, State: "tombstoned"})
+		if err != nil {
+			return fmt.Errorf("store: advance purge job %s to tombstoned: %w", jobID, err)
+		}
+		_, err = q.CreateAuditLog(ctx, sqlcgen.CreateAuditLogParams{
+			ID:          "audit_purge_tombstone_" + jobID,
+			WorkspaceID: workspaceID,
+			Action:      "capture.delete.tombstoned",
+			Subject:     captureID,
+			Details:     []byte("{}"),
+		})
+		return err
+	})
+	return job, err
+}
+
+// FinalizePurgeForCapture is the purge state machine's blobs-deleted ->
+// purged step: it removes the now-orphaned asset rows, clears the
+// capture's disclosable content columns (doc/metadata/env — see
+// ClearCaptureContentForPurge's doc comment for why the captures row
+// itself cannot be deleted outright), flips the purge_jobs row to
+// 'purged', and writes the "capture.delete.purged" audit entry — all in
+// one transaction.
+func FinalizePurgeForCapture(ctx context.Context, pool db.Pool, jobID, captureID, workspaceID string) (sqlcgen.PurgeJob, error) {
+	var job sqlcgen.PurgeJob
+	err := db.WithTx(ctx, pool, func(ctx context.Context, tx pgx.Tx) error {
+		q := sqlcgen.New(tx)
+		// DeleteAssetsForCapture is an unconditional DELETE with no
+		// constraint that can reject it (assets has no append-only
+		// trigger and no FK pointing at it) — deleting zero matching rows
+		// is success, same as everywhere else :execrows is used in this
+		// codebase. The error return exists only for a dead connection,
+		// not something this test suite can trigger without breaking the
+		// transaction wrapper itself.
+		if _, err := q.DeleteAssetsForCapture(ctx, captureID); err != nil {
+			return fmt.Errorf("store: delete assets for capture %s: %w", captureID, err)
+		}
+		if _, err := q.ClearCaptureContentForPurge(ctx, captureID); err != nil {
+			return fmt.Errorf("store: clear capture content %s: %w", captureID, err)
+		}
+		var err error
+		job, err = q.SetPurgeJobState(ctx, sqlcgen.SetPurgeJobStateParams{ID: jobID, State: "purged"})
+		if err != nil {
+			return fmt.Errorf("store: advance purge job %s to purged: %w", jobID, err)
+		}
+		_, err = q.CreateAuditLog(ctx, sqlcgen.CreateAuditLogParams{
+			ID:          "audit_purge_final_" + jobID,
+			WorkspaceID: workspaceID,
+			Action:      "capture.delete.purged",
+			Subject:     captureID,
+			Details:     []byte("{}"),
+		})
+		return err
+	})
+	return job, err
+}
+
+// PurgeTxStore adapts the pool-level TombstoneCaptureForPurge/
+// FinalizePurgeForCapture functions above to purge.TxStore's
+// no-pool-parameter method shape, so the purge pipeline can depend on an
+// interface instead of a concrete *pgxpool.Pool.
+type PurgeTxStore struct {
+	Pool db.Pool
+}
+
+// TombstoneCaptureForPurge implements purge.TxStore.
+func (s PurgeTxStore) TombstoneCaptureForPurge(ctx context.Context, jobID, captureID, workspaceID string) (sqlcgen.PurgeJob, error) {
+	return TombstoneCaptureForPurge(ctx, s.Pool, jobID, captureID, workspaceID)
+}
+
+// FinalizePurgeForCapture implements purge.TxStore.
+func (s PurgeTxStore) FinalizePurgeForCapture(ctx context.Context, jobID, captureID, workspaceID string) (sqlcgen.PurgeJob, error) {
+	return FinalizePurgeForCapture(ctx, s.Pool, jobID, captureID, workspaceID)
 }
 
 // RoleInWorkspace returns userID's role in workspaceID, and false if

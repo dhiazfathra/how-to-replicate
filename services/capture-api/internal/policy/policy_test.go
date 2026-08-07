@@ -50,6 +50,35 @@ func TestResolveFullOverride(t *testing.T) {
 	}
 }
 
+func TestValidate_NoRetentionDaysIsRejected(t *testing.T) {
+	// No override supplied: Resolve leaves RetentionDays at Defaults'
+	// (deliberately absent) zero value, and Validate must reject that —
+	// a workspace cannot come into existence on an implicit number nobody
+	// chose (spec §22 open question 4).
+	got := Resolve(Defaults, Overrides{})
+	if err := got.Validate(); err == nil {
+		t.Fatal("Validate() with no retentionDays override = nil, want ErrRetentionRequired")
+	} else if err != ErrRetentionRequired {
+		t.Fatalf("Validate() error = %v, want ErrRetentionRequired", err)
+	}
+}
+
+func TestValidate_NonPositiveRetentionDaysIsRejected(t *testing.T) {
+	for _, days := range []int{0, -1, -90} {
+		got := Resolve(Defaults, Overrides{RetentionDays: ptrInt(days)})
+		if err := got.Validate(); err == nil {
+			t.Fatalf("Validate() with retentionDays=%d = nil, want error", days)
+		}
+	}
+}
+
+func TestValidate_PositiveRetentionDaysIsAccepted(t *testing.T) {
+	got := Resolve(Defaults, Overrides{RetentionDays: ptrInt(30)})
+	if err := got.Validate(); err != nil {
+		t.Fatalf("Validate() with retentionDays=30 = %v, want nil", err)
+	}
+}
+
 func TestDefaultsMatchCaptureCoreBudget(t *testing.T) {
 	// Mirrors packages/capture-core/src/storage/budget.ts's
 	// DEFAULT_BYTE_LIMIT/DEFAULT_CAPTURE_CAP.
@@ -61,5 +90,8 @@ func TestDefaultsMatchCaptureCoreBudget(t *testing.T) {
 	}
 	if !Defaults.LocalOnly {
 		t.Error("LocalOnly default should be true (privacy-by-default)")
+	}
+	if Defaults.RetentionDays != 0 {
+		t.Errorf("RetentionDays default = %d, want 0 (no code-level default; Validate rejects it)", Defaults.RetentionDays)
 	}
 }

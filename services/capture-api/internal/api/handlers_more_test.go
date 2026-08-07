@@ -47,13 +47,41 @@ func TestCreateWorkspace(t *testing.T) {
 	t.Run("store error", func(t *testing.T) {
 		h := newTestHandlers(fakeQuerier{})
 		h.pool = &fakePool{beginErr: errors.New("boom")}
-		r := withSubject(httptest.NewRequest(http.MethodPost, "/v1/workspaces", strings.NewReader(`{"name":"Acme"}`)), "user-1")
+		r := withSubject(httptest.NewRequest(http.MethodPost, "/v1/workspaces", strings.NewReader(`{"name":"Acme","retentionDays":90}`)), "user-1")
 		rec := httptest.NewRecorder()
 
 		h.createWorkspace(rec, r)
 
 		if rec.Code != http.StatusInternalServerError {
 			t.Fatalf("status = %d, want 500, body = %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	// No code-level retention default exists (policy.Defaults.RetentionDays
+	// is 0 — see internal/policy) — a workspace-creation request that
+	// omits retentionDays (or sends 0/negative) must be rejected outright,
+	// never silently fall back to a number nobody chose.
+	t.Run("missing retentionDays", func(t *testing.T) {
+		h := newTestHandlers(fakeQuerier{})
+		r := withSubject(httptest.NewRequest(http.MethodPost, "/v1/workspaces", strings.NewReader(`{"name":"Acme"}`)), "user-1")
+		rec := httptest.NewRecorder()
+
+		h.createWorkspace(rec, r)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400, body = %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("negative retentionDays", func(t *testing.T) {
+		h := newTestHandlers(fakeQuerier{})
+		r := withSubject(httptest.NewRequest(http.MethodPost, "/v1/workspaces", strings.NewReader(`{"name":"Acme","retentionDays":-5}`)), "user-1")
+		rec := httptest.NewRecorder()
+
+		h.createWorkspace(rec, r)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("status = %d, want 400, body = %s", rec.Code, rec.Body.String())
 		}
 	})
 }
