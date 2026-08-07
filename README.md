@@ -78,7 +78,7 @@ clients/
   viewer/             capture viewer (React) — shared by extension and web
   recording-link/     no-login capture page, export-only
 packages/
-  capture-core/       event model, redaction, step generator, storage, store
+  capture-core/       event model, redaction, step generator, storage, store, sync engine (Task 7)
   llm/                provider interface + HTTP and native-messaging impls
   trackers/           provider interface + GitHub, GitLab impls
 e2e/                  Playwright end-to-end suite (PR-gating) + recorded evidence
@@ -376,6 +376,56 @@ RFC 6455-compatible client to `ws://localhost:8081/v1/sync/deltas/ws`,
 sending the same `X-Htr-Workspace-Id`/`X-Htr-User-Id`/`X-Htr-Role` headers
 PushMutations uses. Each message is JSON: `{"mutations": [...protojson
 Mutation...], "revision": <int64>}`.
+
+### capture-core sync engine (Task 7)
+
+`packages/capture-core/src/sync/` is the client half of §10 — the piece every
+client (extension, recording-link, and eventually the viewer) shares to talk
+to sync-gateway. It has no server wired up yet (no TS ConnectRPC codegen
+exists), so it is built and tested against a plain interface instead:
+
+- **`mutations.ts`** — the closed operation set mirrored from
+  `proto/sync/v1/sync.proto`: `setTitle`, `setSummary`, `setTags`, `assign`,
+  `appendComment`. No generic setter — a new mutable field means a new
+  variant here, deliberately. `FieldKey` is a finer key than `keyof Capture`
+  (`doc.title` vs `doc.summary` both live under `doc`) so rollback/replay
+  never clobbers a sibling field.
+- **`queue.ts`** — the mutation queue, in IndexedDB (`sync_mutations`
+  store, keyed by mutation ULID so `getAll()` is already push order),
+  capped at 5,000 mutations / 5 MB (`QUEUE_MUTATION_CAP` /
+  `QUEUE_BYTE_CAP`). `capacity()` reports depth for a "pending sync"
+  indicator once past 90% of either cap (`QUEUE_WARN_RATIO`).
+- **`engine.ts`** — `createSyncEngine({ transport, repo, store, queue })`.
+  The UI contract is exactly `capture.title = x; capture.save()`: the local
+  observable updates synchronously, and only then does `save()` enqueue —
+  and it checks `queue.hasRoom()` **before** touching the observable, so a
+  full queue refuses the edit (`{ ok: false, reason: 'queue-full' }`) and
+  the previous value stands, rather than accepting an edit that quietly
+  never syncs. `flush()` pushes the queue with exponential backoff and full
+  jitter on failure (`computeBackoffMs`); `pull()` applies deltas and
+  advances the persisted revision cursor. Rollback only happens on an
+  explicit server reject — a thrown/rejected `pushMutations` call (timeout,
+  network error, disconnected socket) is always "retry later," never
+  "undo." A reject also only rewinds if the rejected mutation is still the
+  field's latest queued write: `reconcileReject` restores the field to the
+  rejected mutation's pre-mutation `base`, then replays whatever mutations
+  are still queued for that field with a newer ULID, so a late, out-of-order
+  reject for an old edit can never clobber a newer one.
+- **`transport.ts`** — `SyncTransport`, a plain interface shaped to mirror
+  sync-gateway's `SyncService` (`pushMutations`, `pullDeltas`,
+  `requestAssetUpload`, `completeAssetUpload`) closely enough to be a
+  faithful contract, without depending on generated ConnectRPC code that
+  doesn't exist for TypeScript yet. Tests inject a fake; a real
+  ConnectRPC-backed implementation is future integration work.
+  `hasTransport()`/`engine.isActive()` are what make the engine **inert**
+  without one — `flush()`/`pull()` no-op, but local `save()`/enqueue still
+  work, so a Phase 0 build keeps working unchanged.
+
+Invariant 5 still binds here: nothing under `sync/` imports from `clients/`.
+
+```bash
+pnpm --filter @htr/capture-core test -- src/sync   # queue/mutations/engine/transport, 40+ cases
+```
 
 ## Running the extension
 

@@ -85,6 +85,16 @@ export class CaptureRepository {
     return out;
   }
 
+  /** Persisted `PullDeltas(since=revision)` cursor for a workspace. `0` if never pulled. */
+  async getSyncCursor(workspaceId: string): Promise<number> {
+    const cursor = await this.db.get('sync_cursor', workspaceId);
+    return cursor?.revision ?? 0;
+  }
+
+  async putSyncCursor(workspaceId: string, revision: number): Promise<void> {
+    await this.db.put('sync_cursor', { workspaceId, revision });
+  }
+
   async deleteCapture(id: string): Promise<void> {
     // Single readwrite transaction spanning lookup and delete: the cascade
     // set is computed from a snapshot IndexedDB guarantees can't change
