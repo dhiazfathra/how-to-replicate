@@ -736,6 +736,38 @@ func (q *Queries) GetCaptureFieldVersion(ctx context.Context, arg GetCaptureFiel
 	return i, err
 }
 
+const getCaptureForWorkspace = `-- name: GetCaptureForWorkspace :one
+SELECT id, workspace_id, project_id, source, state, fidelity, created_at, epoch, env, metadata, doc, withheld_event_count, revision, manifest_complete, applied_ruleset_version FROM captures WHERE id = $1 AND workspace_id = $2
+`
+
+type GetCaptureForWorkspaceParams struct {
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
+}
+
+func (q *Queries) GetCaptureForWorkspace(ctx context.Context, arg GetCaptureForWorkspaceParams) (Capture, error) {
+	row := q.db.QueryRow(ctx, getCaptureForWorkspace, arg.ID, arg.WorkspaceID)
+	var i Capture
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.ProjectID,
+		&i.Source,
+		&i.State,
+		&i.Fidelity,
+		&i.CreatedAt,
+		&i.Epoch,
+		&i.Env,
+		&i.Metadata,
+		&i.Doc,
+		&i.WithheldEventCount,
+		&i.Revision,
+		&i.ManifestComplete,
+		&i.AppliedRulesetVersion,
+	)
+	return i, err
+}
+
 const getComment = `-- name: GetComment :one
 SELECT id, capture_id, author_id, body, created_at FROM comments WHERE id = $1
 `
@@ -1051,6 +1083,46 @@ func (q *Queries) ListCaptureEventsByCapture(ctx context.Context, captureID stri
 			&i.Payload,
 			&i.Redaction,
 			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCapturesByWorkspace = `-- name: ListCapturesByWorkspace :many
+SELECT id, workspace_id, project_id, source, state, fidelity, created_at, epoch, env, metadata, doc, withheld_event_count, revision, manifest_complete, applied_ruleset_version FROM captures WHERE workspace_id = $1 ORDER BY created_at
+`
+
+func (q *Queries) ListCapturesByWorkspace(ctx context.Context, workspaceID string) ([]Capture, error) {
+	rows, err := q.db.Query(ctx, listCapturesByWorkspace, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Capture
+	for rows.Next() {
+		var i Capture
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.ProjectID,
+			&i.Source,
+			&i.State,
+			&i.Fidelity,
+			&i.CreatedAt,
+			&i.Epoch,
+			&i.Env,
+			&i.Metadata,
+			&i.Doc,
+			&i.WithheldEventCount,
+			&i.Revision,
+			&i.ManifestComplete,
+			&i.AppliedRulesetVersion,
 		); err != nil {
 			return nil, err
 		}

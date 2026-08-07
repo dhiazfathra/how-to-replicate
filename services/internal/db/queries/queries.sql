@@ -93,6 +93,12 @@ INSERT INTO captures (
 -- name: GetCapture :one
 SELECT * FROM captures WHERE id = $1;
 
+-- name: GetCaptureForWorkspace :one
+SELECT * FROM captures WHERE id = $1 AND workspace_id = $2;
+
+-- name: ListCapturesByWorkspace :many
+SELECT * FROM captures WHERE workspace_id = $1 ORDER BY created_at;
+
 -- name: CreateCaptureEvent :one
 INSERT INTO capture_events (id, capture_id, t, kind, payload, redaction)
 VALUES ($1, $2, $3, $4, $5, $6) RETURNING *;

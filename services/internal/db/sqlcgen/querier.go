@@ -48,6 +48,7 @@ type Querier interface {
 	GetCapture(ctx context.Context, id string) (Capture, error)
 	GetCaptureEvent(ctx context.Context, id string) (CaptureEvent, error)
 	GetCaptureFieldVersion(ctx context.Context, arg GetCaptureFieldVersionParams) (CaptureFieldVersion, error)
+	GetCaptureForWorkspace(ctx context.Context, arg GetCaptureForWorkspaceParams) (Capture, error)
 	GetComment(ctx context.Context, id string) (Comment, error)
 	GetIntegrationBinding(ctx context.Context, id string) (IntegrationBinding, error)
 	GetMembership(ctx context.Context, id string) (Membership, error)
@@ -81,6 +82,7 @@ type Querier interface {
 	// join back to captures.
 	InsertMutationIfNew(ctx context.Context, arg InsertMutationIfNewParams) (Mutation, error)
 	ListCaptureEventsByCapture(ctx context.Context, captureID string) ([]CaptureEvent, error)
+	ListCapturesByWorkspace(ctx context.Context, workspaceID string) ([]Capture, error)
 	// Task 6's delta log: every mutation applied in workspace_id with seq >
 	// since, ordered by seq so a client resumes exactly where it left off
 	// regardless of which capture each mutation touched. limit is passed as
