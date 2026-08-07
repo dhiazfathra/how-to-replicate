@@ -7,3 +7,5 @@ use ./proto
 use ./services/sync-gateway
 
 use ./services/capture-api
+
+use ./services/redaction-audit

@@ -88,6 +88,8 @@ proto/                Buf module — API schema, generated Go checked in under p
 services/             Go workspace (Phase 1+)
   internal/           shared packages: db, migrate, otel, httpx, storage, authz, testsupport
   sync-gateway/       mutation intake, revisions, LWW, delta pull, WS fan-out (Tasks 4/6)
+  capture-api/        workspace/project CRUD, capture reads, comments, share links (Tasks 10/11)
+  redaction-audit/    server-side redaction alarm — re-checks synced captures, alerts, never redacts (Task 12)
 docs/
   decisions/          ADRs
   superpowers/specs/  design specs
@@ -163,7 +165,10 @@ whatever `redaction-audit` evaluates against later), append-only `capture_events
 (`t` is a ms offset from `capture.epoch`, never wall-clock), `assets`, `mutations`
 (PK on the client-minted mutation ULID, so replay is idempotent), `comments`,
 versioned `redaction_rulesets`, append-only `audit_log`, `share_links`,
-`integration_bindings`, and `outbox` (table only — Phase 2 wires the logic).
+`integration_bindings`, and `outbox` (table only — Phase 2 wires the logic). Task 12
+(`00007_redaction_audit.sql`) adds append-only `redaction_audit_findings` — the *only*
+table `redaction-audit` writes to; it never touches `captures`/`capture_events`
+themselves (see `services/redaction-audit/README.md`).
 
 Two Postgres roles enforce immutability, not just convention: the **migration role**
 (whoever runs `goose`, i.e. owns the schema) and **`htr_runtime`**, the role every
