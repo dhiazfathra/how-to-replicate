@@ -449,6 +449,47 @@ func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (P
 	return i, err
 }
 
+const createRedactionAuditFinding = `-- name: CreateRedactionAuditFinding :one
+INSERT INTO redaction_audit_findings (
+    id, capture_id, workspace_id, applied_ruleset_version,
+    evaluation_ruleset_version, rule_ids, event_ids
+) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, capture_id, workspace_id, applied_ruleset_version, evaluation_ruleset_version, rule_ids, event_ids, created_at
+`
+
+type CreateRedactionAuditFindingParams struct {
+	ID                       string      `json:"id"`
+	CaptureID                string      `json:"capture_id"`
+	WorkspaceID              string      `json:"workspace_id"`
+	AppliedRulesetVersion    pgtype.Int4 `json:"applied_ruleset_version"`
+	EvaluationRulesetVersion int32       `json:"evaluation_ruleset_version"`
+	RuleIds                  []byte      `json:"rule_ids"`
+	EventIds                 []byte      `json:"event_ids"`
+}
+
+func (q *Queries) CreateRedactionAuditFinding(ctx context.Context, arg CreateRedactionAuditFindingParams) (RedactionAuditFinding, error) {
+	row := q.db.QueryRow(ctx, createRedactionAuditFinding,
+		arg.ID,
+		arg.CaptureID,
+		arg.WorkspaceID,
+		arg.AppliedRulesetVersion,
+		arg.EvaluationRulesetVersion,
+		arg.RuleIds,
+		arg.EventIds,
+	)
+	var i RedactionAuditFinding
+	err := row.Scan(
+		&i.ID,
+		&i.CaptureID,
+		&i.WorkspaceID,
+		&i.AppliedRulesetVersion,
+		&i.EvaluationRulesetVersion,
+		&i.RuleIds,
+		&i.EventIds,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const createRedactionRuleset = `-- name: CreateRedactionRuleset :one
 INSERT INTO redaction_rulesets (version, workspace_id, rules) VALUES ($1, $2, $3) RETURNING version, workspace_id, rules, created_at
 `
@@ -797,6 +838,25 @@ func (q *Queries) GetIntegrationBinding(ctx context.Context, id string) (Integra
 		&i.WorkspaceID,
 		&i.Provider,
 		&i.Config,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getLatestRedactionRuleset = `-- name: GetLatestRedactionRuleset :one
+SELECT version, workspace_id, rules, created_at FROM redaction_rulesets WHERE workspace_id = $1 ORDER BY version DESC LIMIT 1
+`
+
+// The audit's own evaluation ruleset: the newest version on record for the
+// workspace, which may be newer than any given capture's
+// applied_ruleset_version.
+func (q *Queries) GetLatestRedactionRuleset(ctx context.Context, workspaceID string) (RedactionRuleset, error) {
+	row := q.db.QueryRow(ctx, getLatestRedactionRuleset, workspaceID)
+	var i RedactionRuleset
+	err := row.Scan(
+		&i.Version,
+		&i.WorkspaceID,
+		&i.Rules,
 		&i.CreatedAt,
 	)
 	return i, err
@@ -1199,6 +1259,114 @@ func (q *Queries) ListProjectsByWorkspace(ctx context.Context, workspaceID strin
 			&i.WorkspaceID,
 			&i.Name,
 			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listReadyCapturesByWorkspace = `-- name: ListReadyCapturesByWorkspace :many
+SELECT id, workspace_id, project_id, source, state, fidelity, created_at, epoch, env, metadata, doc, withheld_event_count, revision, manifest_complete, applied_ruleset_version FROM captures WHERE workspace_id = $1 AND state = 'ready' ORDER BY created_at
+`
+
+// redaction-audit's poll source: only "ready" captures have crossed the
+// gate (invariant 1) and are worth re-checking; nothing earlier in the
+// pipeline has finished redacting yet.
+func (q *Queries) ListReadyCapturesByWorkspace(ctx context.Context, workspaceID string) ([]Capture, error) {
+	rows, err := q.db.Query(ctx, listReadyCapturesByWorkspace, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Capture
+	for rows.Next() {
+		var i Capture
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.ProjectID,
+			&i.Source,
+			&i.State,
+			&i.Fidelity,
+			&i.CreatedAt,
+			&i.Epoch,
+			&i.Env,
+			&i.Metadata,
+			&i.Doc,
+			&i.WithheldEventCount,
+			&i.Revision,
+			&i.ManifestComplete,
+			&i.AppliedRulesetVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRedactionAuditFindingsByCapture = `-- name: ListRedactionAuditFindingsByCapture :many
+SELECT id, capture_id, workspace_id, applied_ruleset_version, evaluation_ruleset_version, rule_ids, event_ids, created_at FROM redaction_audit_findings WHERE capture_id = $1 ORDER BY created_at
+`
+
+func (q *Queries) ListRedactionAuditFindingsByCapture(ctx context.Context, captureID string) ([]RedactionAuditFinding, error) {
+	rows, err := q.db.Query(ctx, listRedactionAuditFindingsByCapture, captureID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []RedactionAuditFinding
+	for rows.Next() {
+		var i RedactionAuditFinding
+		if err := rows.Scan(
+			&i.ID,
+			&i.CaptureID,
+			&i.WorkspaceID,
+			&i.AppliedRulesetVersion,
+			&i.EvaluationRulesetVersion,
+			&i.RuleIds,
+			&i.EventIds,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listWorkspaces = `-- name: ListWorkspaces :many
+SELECT id, name, created_at, policy_overrides FROM workspaces ORDER BY created_at
+`
+
+// redaction-audit polls every workspace; unlike ListWorkspacesForUser this
+// is not scoped to a caller, since the audit acts as the platform, not on
+// behalf of a member.
+func (q *Queries) ListWorkspaces(ctx context.Context) ([]Workspace, error) {
+	rows, err := q.db.Query(ctx, listWorkspaces)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Workspace
+	for rows.Next() {
+		var i Workspace
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.CreatedAt,
+			&i.PolicyOverrides,
 		); err != nil {
 			return nil, err
 		}

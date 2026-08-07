@@ -128,6 +128,17 @@ type Project struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 }
 
+type RedactionAuditFinding struct {
+	ID                       string             `json:"id"`
+	CaptureID                string             `json:"capture_id"`
+	WorkspaceID              string             `json:"workspace_id"`
+	AppliedRulesetVersion    pgtype.Int4        `json:"applied_ruleset_version"`
+	EvaluationRulesetVersion int32              `json:"evaluation_ruleset_version"`
+	RuleIds                  []byte             `json:"rule_ids"`
+	EventIds                 []byte             `json:"event_ids"`
+	CreatedAt                pgtype.Timestamptz `json:"created_at"`
+}
+
 type RedactionRuleset struct {
 	Version     int32              `json:"version"`
 	WorkspaceID string             `json:"workspace_id"`

@@ -32,6 +32,7 @@ type Querier interface {
 	CreateMutation(ctx context.Context, arg CreateMutationParams) (Mutation, error)
 	CreateOutboxEntry(ctx context.Context, arg CreateOutboxEntryParams) (Outbox, error)
 	CreateProject(ctx context.Context, arg CreateProjectParams) (Project, error)
+	CreateRedactionAuditFinding(ctx context.Context, arg CreateRedactionAuditFindingParams) (RedactionAuditFinding, error)
 	CreateRedactionRuleset(ctx context.Context, arg CreateRedactionRulesetParams) (RedactionRuleset, error)
 	CreateShareLink(ctx context.Context, arg CreateShareLinkParams) (ShareLink, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
@@ -51,6 +52,10 @@ type Querier interface {
 	GetCaptureForWorkspace(ctx context.Context, arg GetCaptureForWorkspaceParams) (Capture, error)
 	GetComment(ctx context.Context, id string) (Comment, error)
 	GetIntegrationBinding(ctx context.Context, id string) (IntegrationBinding, error)
+	// The audit's own evaluation ruleset: the newest version on record for the
+	// workspace, which may be newer than any given capture's
+	// applied_ruleset_version.
+	GetLatestRedactionRuleset(ctx context.Context, workspaceID string) (RedactionRuleset, error)
 	GetMembership(ctx context.Context, id string) (Membership, error)
 	// The RBAC seam: resolves a caller's role in a workspace without
 	// distinguishing "no such workspace" from "not a member" — both are zero
@@ -90,6 +95,15 @@ type Querier interface {
 	// second COUNT query.
 	ListMutationsSinceRevision(ctx context.Context, arg ListMutationsSinceRevisionParams) ([]Mutation, error)
 	ListProjectsByWorkspace(ctx context.Context, workspaceID string) ([]Project, error)
+	// redaction-audit's poll source: only "ready" captures have crossed the
+	// gate (invariant 1) and are worth re-checking; nothing earlier in the
+	// pipeline has finished redacting yet.
+	ListReadyCapturesByWorkspace(ctx context.Context, workspaceID string) ([]Capture, error)
+	ListRedactionAuditFindingsByCapture(ctx context.Context, captureID string) ([]RedactionAuditFinding, error)
+	// redaction-audit polls every workspace; unlike ListWorkspacesForUser this
+	// is not scoped to a caller, since the audit acts as the platform, not on
+	// behalf of a member.
+	ListWorkspaces(ctx context.Context) ([]Workspace, error)
 	ListWorkspacesForUser(ctx context.Context, userID string) ([]Workspace, error)
 	// Workspace and existence are checked in one predicate so a mutation
 	// naming a capture outside the caller's workspace fails the same way as a

@@ -10,6 +10,12 @@ UPDATE workspaces SET name = $2 WHERE id = $1 RETURNING *;
 -- name: DeleteWorkspace :exec
 DELETE FROM workspaces WHERE id = $1;
 
+-- name: ListWorkspaces :many
+-- redaction-audit polls every workspace; unlike ListWorkspacesForUser this
+-- is not scoped to a caller, since the audit acts as the platform, not on
+-- behalf of a member.
+SELECT * FROM workspaces ORDER BY created_at;
+
 -- name: ListWorkspacesForUser :many
 SELECT w.* FROM workspaces w
 JOIN memberships m ON m.workspace_id = w.id
@@ -258,3 +264,24 @@ INSERT INTO outbox (id, topic, payload) VALUES ($1, $2, $3) RETURNING *;
 
 -- name: GetOutboxEntry :one
 SELECT * FROM outbox WHERE id = $1;
+
+-- name: ListReadyCapturesByWorkspace :many
+-- redaction-audit's poll source: only "ready" captures have crossed the
+-- gate (invariant 1) and are worth re-checking; nothing earlier in the
+-- pipeline has finished redacting yet.
+SELECT * FROM captures WHERE workspace_id = $1 AND state = 'ready' ORDER BY created_at;
+
+-- name: GetLatestRedactionRuleset :one
+-- The audit's own evaluation ruleset: the newest version on record for the
+-- workspace, which may be newer than any given capture's
+-- applied_ruleset_version.
+SELECT * FROM redaction_rulesets WHERE workspace_id = $1 ORDER BY version DESC LIMIT 1;
+
+-- name: CreateRedactionAuditFinding :one
+INSERT INTO redaction_audit_findings (
+    id, capture_id, workspace_id, applied_ruleset_version,
+    evaluation_ruleset_version, rule_ids, event_ids
+) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *;
+
+-- name: ListRedactionAuditFindingsByCapture :many
+SELECT * FROM redaction_audit_findings WHERE capture_id = $1 ORDER BY created_at;
