@@ -203,6 +203,14 @@ func TestStore_ListWorkspacesAndGetForMember(t *testing.T) {
 	}
 }
 
+func TestStore_ListWorkspacesForUser_Error(t *testing.T) {
+	s := New(fakeQuerier{err: errors.New("boom")})
+
+	if _, err := s.ListWorkspacesForUser(t.Context(), "user"); err == nil {
+		t.Fatal("ListWorkspacesForUser() error = nil, want error")
+	}
+}
+
 func TestStore_SetPolicyOverrides(t *testing.T) {
 	ws := sqlcgen.Workspace{ID: "ws_1", PolicyOverrides: []byte(`{"localOnly":false}`)}
 	s := New(fakeQuerier{workspace: ws})

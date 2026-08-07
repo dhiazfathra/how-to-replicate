@@ -62,6 +62,20 @@ func TestStore_Integration(t *testing.T) {
 		t.Fatalf("RoleInWorkspace() = (%q, %v, %v), want (owner, true, nil)", role, ok, err)
 	}
 
+	// A duplicate workspace ID fails CreateWorkspace itself (primary key
+	// violation), before CreateMembership ever runs — proves the tx is
+	// rolled back and the error surfaces rather than a partial write.
+	if _, err := CreateWorkspaceWithOwner(ctx, pool, "ws_int", "Acme Duplicate", "mem_int_dup", "user_int"); err == nil {
+		t.Fatal("CreateWorkspaceWithOwner() with duplicate id: err = nil, want error")
+	}
+	var membershipCount int
+	if err := sqlDB.QueryRowContext(ctx, "SELECT count(*) FROM memberships WHERE id = $1", "mem_int_dup").Scan(&membershipCount); err != nil {
+		t.Fatalf("count memberships: %v", err)
+	}
+	if membershipCount != 0 {
+		t.Fatalf("membership mem_int_dup exists after failed CreateWorkspaceWithOwner, want tx rolled back")
+	}
+
 	// A different user has no membership row — same not-found shape as a
 	// workspace that doesn't exist at all.
 	if _, ok, err := s.RoleInWorkspace(ctx, ws.ID, "user_stranger"); err != nil || ok {

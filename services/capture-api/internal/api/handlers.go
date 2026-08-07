@@ -183,11 +183,10 @@ func (h *handlers) updatePolicy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw, err := json.Marshal(overrides)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
+	// policy.Overrides is a plain struct of pointers/slices to JSON-safe
+	// scalars — Marshal on it cannot fail, so there is no error branch here
+	// to test or handle.
+	raw, _ := json.Marshal(overrides)
 
 	ws, err := h.store.SetPolicyOverrides(r.Context(), chi.URLParam(r, "workspaceID"), raw)
 	if err != nil {

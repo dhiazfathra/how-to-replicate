@@ -42,7 +42,30 @@ func TestCreateWorkspace(t *testing.T) {
 			t.Fatalf("status = %d, want 400", rec.Code)
 		}
 	})
+
+	t.Run("store error", func(t *testing.T) {
+		h := newTestHandlers(fakeQuerier{})
+		h.pool = &fakePool{beginErr: errors.New("boom")}
+		r := withSubject(httptest.NewRequest(http.MethodPost, "/v1/workspaces", strings.NewReader(`{"name":"Acme"}`)), "user-1")
+		rec := httptest.NewRecorder()
+
+		h.createWorkspace(rec, r)
+
+		if rec.Code != http.StatusInternalServerError {
+			t.Fatalf("status = %d, want 500, body = %s", rec.Code, rec.Body.String())
+		}
+	})
 }
+
+// fakePool is a minimal db.Pool that fails at Begin, letting tests exercise
+// createWorkspace's store-error branch without a real database transaction.
+type fakePool struct {
+	beginErr error
+}
+
+func (f *fakePool) Ping(context.Context) error            { return nil }
+func (f *fakePool) Begin(context.Context) (pgx.Tx, error) { return nil, f.beginErr }
+func (f *fakePool) Close()                                {}
 
 func TestGetWorkspace_Error(t *testing.T) {
 	h := newTestHandlers(fakeQuerier{err: errors.New("boom")})

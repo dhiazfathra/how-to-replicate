@@ -178,14 +178,14 @@ jobs:
         working-directory: services/capture-api
         run: go test $(go list ./... | grep -v /cmd/) -covermode=atomic -coverprofile=coverage.out
 
-      - name: Enforce coverage floor (capture-api)
+      - name: Enforce 100% coverage (capture-api)
         working-directory: services/capture-api
         run: |
           go tool cover -func=coverage.out | tee coverage.txt
           total=$(grep '^total:' coverage.txt | awk '{print $3}' | tr -d '%')
           echo "total coverage: ${total}%"
-          if awk "BEGIN { exit !($total < 90) }"; then
-            echo "coverage ${total}% is below the required 90% floor"
+          if awk "BEGIN { exit !($total < 100) }"; then
+            echo "coverage ${total}% is below the required 100%"
             exit 1
           fi
 
