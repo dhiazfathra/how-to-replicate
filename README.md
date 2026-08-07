@@ -444,6 +444,78 @@ Invariant 5 still binds here: nothing under `sync/` imports from `clients/`.
 pnpm --filter @htr/capture-core test -- src/sync   # queue/mutations/engine/transport, 40+ cases
 ```
 
+### Identity — OIDC, workspaces/projects, RBAC (Task 10)
+
+Task 10 replaces the client-trusted header seam (`X-Htr-Workspace-Id` /
+`X-Htr-User-Id` / `X-Htr-Role`) with real identity for anything reachable by
+untrusted callers, and adds the workspace/project domain those headers were
+standing in for.
+
+- **`services/internal/auth`** — OIDC against the existing IdP
+  (`coreos/go-oidc`), no password handling of our own. The authorization-code
+  flow (`NewAttempt`/`BuildAuthURL`/`Exchange`) is PKCE-S256, public-client
+  (no secret): `state` is generated per attempt and compared on callback
+  (`ErrStateMismatch`), `nonce` is generated per attempt and asserted against
+  the ID token's `nonce` claim since go-oidc verifies signature/`iss`/`aud`/
+  expiry but not nonce (`ErrNonceMismatch`), and a replay guard rejects an
+  ID token presented twice (`ErrReplayedToken`). `Middleware` verifies a
+  bearer token per-request and injects the subject/claims into context for
+  services to resolve a role from — it does not resolve workspace role
+  itself. JWKS key rotation is honoured by go-oidc's remote key set: an
+  unknown `kid` triggers exactly one refetch before the token is rejected
+  (verified by `services/internal/auth`'s tests against a fake JWKS server
+  that counts requests).
+- **`services/capture-api`** (new service, `:8082` by default) — workspace
+  and project CRUD, and the per-workspace policy object (storage cap,
+  capture cap, LLM provider chain + `localOnly`, origin allow-list,
+  retention window — `internal/policy`, defaults matching
+  `packages/capture-core`'s client-side budget defaults). Every route
+  resolves the caller's role for the workspace named in the URL from
+  `memberships` and enforces it via `internal/authz.Can`; a workspace that
+  doesn't exist and a workspace the caller isn't a member of return the
+  identical 404 — existence is never disclosed to a non-member. Writing the
+  policy is owner-only (checked directly against `authz.RoleOwner`, not
+  `authz.Can`, since it isn't modeled as an ordinary permission).
+  `services/internal/migrate/migrations/00006_workspace_policy.sql` adds
+  the `policy_overrides` column `Resolve` merges over defaults.
+- **sync-gateway** now runs `authctx.OIDCMiddleware` in production
+  (`cmd/sync-gateway/main.go`), which verifies the bearer token and resolves
+  the caller's role from `memberships` via `authctx.DBMembershipResolver`
+  before populating the same `authctx.WithWorkspaceID`/`WithUserID`/`WithRole`
+  context every RPC already reads. `authctx.HeaderMiddleware` (the old
+  client-trusted seam) still exists but only as the local-dev/test fallback
+  used when `HTR_OIDC_ISSUER` is unset — Tasks 4-6's existing tests keep
+  injecting identity directly via `authctx.WithWorkspaceID` etc. as test
+  doubles, unaffected by this change.
+- **`packages/capture-core`** partitions the local store by
+  `(subject, workspaceId)` (`src/store/identity-partition.ts`) instead of one
+  global database. `openIdentityPartition` is the single entrypoint the app
+  shell calls on boot and after login/logout: first paint reads only the
+  partition for the last authenticated identity recorded locally at login —
+  never gated on a token check, per the local-first / render-first
+  convention — but on logout, or when a new login's identity differs from
+  the recorded one, the prior partition is closed and its IndexedDB database
+  deleted (awaited) *before* the new partition is opened or the identity
+  pointer is updated. Because that purge is `await`ed ahead of the new
+  partition's open call inside one function, there is no code path — and no
+  caller — that can render a byte of a previous, different identity's data,
+  even transiently. Token expiry alone never triggers this path, so a
+  painted UI stays intact until the next failed sync delta, per
+  render-first-authenticate-second.
+
+Environment variables (sync-gateway and capture-api, production):
+
+| Variable | Purpose |
+| --- | --- |
+| `HTR_OIDC_ISSUER` | OIDC discovery issuer URL. Unset ⇒ sync-gateway falls back to the dev header seam; capture-api requires it. |
+| `HTR_OIDC_CLIENT_ID` | Public client ID for the authorization-code+PKCE flow and token audience checks. |
+
+```bash
+go test ./services/internal/auth/...   # state/nonce/replay/JWKS-rotation
+go test ./services/capture-api/...     # RBAC matrix, non-disclosing 404s, policy resolution
+pnpm --filter @htr/capture-core test -- src/store/identity-partition   # partition/purge ordering
+```
+
 ## Running the extension
 
 ```bash
