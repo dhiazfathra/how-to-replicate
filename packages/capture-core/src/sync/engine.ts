@@ -114,9 +114,13 @@ export function createSyncEngine(config: SyncEngineConfig): SyncEngine {
 
     const items: QueuedMutation[] = [];
     let working = requireCapture(store, captureId);
+    // clientT is an offset from this capture's epoch, per Mutation.clientT's
+    // contract and the project convention (no wall-clock timestamps in a
+    // capture) — never `now()` directly.
+    const clientT = now() - working.epoch;
     for (const { field, op } of ops) {
       const base = getFieldValue(working, field);
-      items.push({ mutation: { id: newId(), captureId, op, clientT: now() }, field, base });
+      items.push({ mutation: { id: newId(), captureId, op, clientT }, field, base });
       working = applyMutation(working, op);
     }
 

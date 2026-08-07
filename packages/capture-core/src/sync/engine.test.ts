@@ -136,6 +136,26 @@ describe('createSyncEngine', () => {
     expect((await h.queue.list())[0]?.mutation.op).toEqual({ type: 'setTitle', title: 'New title' });
   });
 
+  it('clientT is an offset from capture.epoch, not a wall-clock timestamp', async () => {
+    const epoched = makeCapture('cap-epoch');
+    epoched.epoch = 1_000_000;
+    h.store.putLocal(epoched);
+    await h.repo.putCapture(epoched);
+
+    const engine = createSyncEngine({
+      transport: fakeTransport(),
+      repo: h.repo,
+      store: h.store,
+      queue: h.queue,
+      now: () => 1_000_777,
+    });
+    const cap = engine.handle('cap-epoch');
+    cap.title = 'Offset title';
+    await cap.save();
+
+    expect((await h.queue.list())[0]?.mutation.clientT).toBe(777);
+  });
+
   it('save() with no changed fields is a cheap no-op', async () => {
     const engine = createSyncEngine({
       transport: fakeTransport(),
