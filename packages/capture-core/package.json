@@ -5,6 +5,9 @@
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
+  "scripts": {
+    "export:audit-corpus": "vite-node scripts/export-audit-corpus.ts ../../services/redaction-audit/testdata/corpus.json"
+  },
   "dependencies": {
     "idb": "^8.0.0",
     "ulid": "^3.0.2"
