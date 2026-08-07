@@ -188,6 +188,15 @@ CREATE TRIGGER comments_no_update BEFORE UPDATE OR DELETE ON comments
     FOR EACH ROW EXECUTE FUNCTION reject_mutation();
 -- +goose StatementEnd
 
+-- redaction_rulesets is versioned and replaced wholesale, never edited:
+-- applied_ruleset_version and audit attribution depend on a ruleset
+-- version's rules never changing after creation, so it gets the same
+-- append-only trigger as the event/log tables above.
+-- +goose StatementBegin
+CREATE TRIGGER redaction_rulesets_no_update BEFORE UPDATE OR DELETE ON redaction_rulesets
+    FOR EACH ROW EXECUTE FUNCTION reject_mutation();
+-- +goose StatementEnd
+
 -- Two roles: migration role owns the schema (the connecting/superuser role
 -- that ran this migration already owns it); htr_runtime is what every
 -- service connects as. It gets SELECT+INSERT everywhere, but never
@@ -212,17 +221,17 @@ GRANT USAGE ON SCHEMA public TO htr_runtime;
 -- +goose StatementBegin
 GRANT SELECT, INSERT, UPDATE, DELETE ON
     workspaces, projects, users, memberships,
-    captures, assets, redaction_rulesets, share_links,
+    captures, assets, share_links,
     integration_bindings, outbox
     TO htr_runtime;
 -- +goose StatementEnd
 
 -- +goose StatementBegin
-GRANT SELECT, INSERT ON capture_events, mutations, comments, audit_log TO htr_runtime;
+GRANT SELECT, INSERT ON capture_events, mutations, comments, audit_log, redaction_rulesets TO htr_runtime;
 -- +goose StatementEnd
 
 -- +goose StatementBegin
-REVOKE UPDATE, DELETE ON capture_events, mutations, comments, audit_log FROM htr_runtime;
+REVOKE UPDATE, DELETE ON capture_events, mutations, comments, audit_log, redaction_rulesets FROM htr_runtime;
 -- +goose StatementEnd
 
 -- +goose StatementBegin

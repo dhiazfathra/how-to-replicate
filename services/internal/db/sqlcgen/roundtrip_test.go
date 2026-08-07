@@ -369,6 +369,35 @@ func TestImmutability_MutationsAndCommentsRejectUpdateAndDelete(t *testing.T) {
 	}
 }
 
+func TestImmutability_RedactionRulesetsRejectsUpdateAndDelete(t *testing.T) {
+	ctx := context.Background()
+	dsns := migratedPostgres(t, ctx)
+
+	pool := mustConnect(t, ctx, dsns.migration)
+	q := New(pool)
+	_ = seedFixtures(t, ctx, q)
+
+	if _, err := q.CreateRedactionRuleset(ctx, CreateRedactionRulesetParams{
+		Version: 2, WorkspaceID: "ws_1", Rules: []byte(`{}`),
+	}); err != nil {
+		t.Fatalf("seed redaction_rulesets row: %v", err)
+	}
+
+	update := "UPDATE redaction_rulesets SET rules = '{\"tampered\":true}' WHERE version = 2"
+	del := "DELETE FROM redaction_rulesets WHERE version = 2"
+
+	// As the runtime role: this is the only connection any service ever
+	// makes, and the grant alone should stop both statements.
+	assertRejected(t, ctx, dsns.runtime, update, "runtime role UPDATE")
+	assertRejected(t, ctx, dsns.runtime, del, "runtime role DELETE")
+
+	// As the migration role (schema owner): grants don't bind the owner,
+	// so only the trigger can stop this. Proves the trigger, not just the
+	// grant, is doing the work.
+	assertRejected(t, ctx, dsns.migration, update, "migration role UPDATE")
+	assertRejected(t, ctx, dsns.migration, del, "migration role DELETE")
+}
+
 func TestQueries_WithTxAndClosedPoolErrors(t *testing.T) {
 	ctx := context.Background()
 	dsns := migratedPostgres(t, ctx)
