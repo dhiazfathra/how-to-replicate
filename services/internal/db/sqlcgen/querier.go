@@ -36,6 +36,8 @@ type Querier interface {
 	CreateShareLink(ctx context.Context, arg CreateShareLinkParams) (ShareLink, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
 	CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams) (Workspace, error)
+	DeleteProjectForWorkspace(ctx context.Context, arg DeleteProjectForWorkspaceParams) (int64, error)
+	DeleteWorkspace(ctx context.Context, id string) error
 	GetAsset(ctx context.Context, id string) (Asset, error)
 	// Same no-existence-leak shape as LockCaptureForWorkspace: an asset id that
 	// belongs to a capture outside the caller's workspace, or doesn't exist at
@@ -49,13 +51,26 @@ type Querier interface {
 	GetComment(ctx context.Context, id string) (Comment, error)
 	GetIntegrationBinding(ctx context.Context, id string) (IntegrationBinding, error)
 	GetMembership(ctx context.Context, id string) (Membership, error)
+	// The RBAC seam: resolves a caller's role in a workspace without
+	// distinguishing "no such workspace" from "not a member" — both are zero
+	// rows, and callers must turn that into the same not-found response either
+	// way (see internal/authz and sync-gateway/internal/authctx.OIDCMiddleware).
+	GetMembershipByWorkspaceAndUser(ctx context.Context, arg GetMembershipByWorkspaceAndUserParams) (Membership, error)
 	GetMutation(ctx context.Context, id string) (Mutation, error)
 	GetOutboxEntry(ctx context.Context, id string) (Outbox, error)
 	GetProject(ctx context.Context, id string) (Project, error)
+	// Scoped by workspace_id so a project ID belonging to another workspace
+	// returns pgx.ErrNoRows rather than another workspace's data — the
+	// non-disclosing cross-workspace read.
+	GetProjectForWorkspace(ctx context.Context, arg GetProjectForWorkspaceParams) (Project, error)
 	GetRedactionRuleset(ctx context.Context, version int32) (RedactionRuleset, error)
 	GetShareLink(ctx context.Context, id string) (ShareLink, error)
 	GetUser(ctx context.Context, id string) (User, error)
 	GetWorkspace(ctx context.Context, id string) (Workspace, error)
+	// Same no-existence-leak shape as GetProjectForWorkspace/GetAssetForWorkspace:
+	// a workspace id the caller isn't a member of returns pgx.ErrNoRows
+	// identically to a workspace id that doesn't exist at all.
+	GetWorkspaceForMember(ctx context.Context, arg GetWorkspaceForMemberParams) (Workspace, error)
 	// Idempotent variant of CreateMutation used by sync-gateway: ON CONFLICT DO
 	// NOTHING never updates the row (mutations stays append-only, same
 	// reasoning as CreateMutation above), it just makes a duplicate insert a
@@ -72,6 +87,8 @@ type Querier interface {
 	// requested-page-size+1 by the caller so it can detect has_more without a
 	// second COUNT query.
 	ListMutationsSinceRevision(ctx context.Context, arg ListMutationsSinceRevisionParams) ([]Mutation, error)
+	ListProjectsByWorkspace(ctx context.Context, workspaceID string) ([]Project, error)
+	ListWorkspacesForUser(ctx context.Context, userID string) ([]Workspace, error)
 	// Workspace and existence are checked in one predicate so a mutation
 	// naming a capture outside the caller's workspace fails the same way as a
 	// mutation naming a capture that doesn't exist at all — the caller cannot
@@ -83,6 +100,9 @@ type Querier interface {
 	RevokeShareLink(ctx context.Context, id string) (ShareLink, error)
 	SetCaptureManifestComplete(ctx context.Context, arg SetCaptureManifestCompleteParams) (Capture, error)
 	UpdateCaptureRevisionAndDoc(ctx context.Context, arg UpdateCaptureRevisionAndDocParams) (Capture, error)
+	UpdateProjectForWorkspace(ctx context.Context, arg UpdateProjectForWorkspaceParams) (Project, error)
+	UpdateWorkspace(ctx context.Context, arg UpdateWorkspaceParams) (Workspace, error)
+	UpdateWorkspacePolicyOverrides(ctx context.Context, arg UpdateWorkspacePolicyOverridesParams) (Workspace, error)
 	// Creates the manifest entry (ADR-012: "the manifest entry for each asset
 	// carries the expected size and content hash before the PUT is issued") on
 	// first request, or repoints object_key at a freshly minted key on
@@ -91,6 +111,10 @@ type Querier interface {
 	// never itself flip a verified asset back to unverified.
 	UpsertAssetForUpload(ctx context.Context, arg UpsertAssetForUploadParams) (Asset, error)
 	UpsertCaptureFieldVersion(ctx context.Context, arg UpsertCaptureFieldVersionParams) (CaptureFieldVersion, error)
+	// Identity is minted by the IdP (the OIDC subject), not by us, so first
+	// login upserts a local user row keyed on that subject rather than
+	// inserting and failing on conflict.
+	UpsertUser(ctx context.Context, arg UpsertUserParams) (User, error)
 }
 
 var _ Querier = (*Queries)(nil)

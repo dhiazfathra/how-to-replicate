@@ -3,7 +3,9 @@ module github.com/dhiazfathra/how-to-replicate/services/internal
 go 1.25.0
 
 require (
+	github.com/coreos/go-oidc/v3 v3.20.0
 	github.com/go-chi/chi/v5 v5.1.0
+	github.com/go-jose/go-jose/v4 v4.1.4
 	github.com/jackc/pgx/v5 v5.9.2
 	github.com/minio/minio-go/v7 v7.0.77
 	github.com/pressly/goose/v3 v3.22.1
@@ -14,6 +16,7 @@ require (
 	go.opentelemetry.io/otel v1.41.0
 	go.opentelemetry.io/otel/sdk v1.35.0
 	go.opentelemetry.io/otel/sdk/metric v1.35.0
+	golang.org/x/oauth2 v0.36.0
 )
 
 require (

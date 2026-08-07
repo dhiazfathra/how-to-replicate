@@ -16,6 +16,14 @@ func TestCan(t *testing.T) {
 		{RoleViewer, PermissionCaptureRead, true},
 		{RoleViewer, PermissionCaptureWrite, false},
 		{Role("unknown"), PermissionCaptureRead, false},
+		{RoleOwner, PermissionWorkspaceManage, true},
+		{RoleAdmin, PermissionWorkspaceManage, true},
+		{RoleMember, PermissionWorkspaceManage, false},
+		{RoleViewer, PermissionWorkspaceManage, false},
+		{RoleOwner, PermissionProjectManage, true},
+		{RoleAdmin, PermissionProjectManage, true},
+		{RoleMember, PermissionProjectManage, false},
+		{RoleViewer, PermissionProjectManage, false},
 	}
 
 	for _, tc := range cases {
@@ -30,8 +38,8 @@ func TestPermissions(t *testing.T) {
 		role Role
 		want int
 	}{
-		{RoleOwner, 6},
-		{RoleAdmin, 5},
+		{RoleOwner, 8},
+		{RoleAdmin, 7},
 		{RoleMember, 2},
 		{RoleViewer, 1},
 		{Role("unknown"), 0},

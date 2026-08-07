@@ -15,6 +15,14 @@ const (
 	PermissionMemberInvite  Permission = "member:invite"
 	PermissionMemberRemove  Permission = "member:remove"
 	PermissionBillingManage Permission = "billing:manage"
+	// PermissionWorkspaceManage covers renaming a workspace and other
+	// workspace-level settings (not policy — see capture-api's PUT
+	// .../policy, which is owner-only and checked directly against
+	// RoleOwner rather than through this permission).
+	PermissionWorkspaceManage Permission = "workspace:manage"
+	// PermissionProjectManage covers creating/renaming projects within a
+	// workspace.
+	PermissionProjectManage Permission = "project:manage"
 )
 
 // Role is a workspace-scoped role name.
@@ -34,10 +42,12 @@ var rolePermissions = map[Role]map[Permission]struct{}{
 	RoleOwner: set(
 		PermissionCaptureRead, PermissionCaptureWrite, PermissionCaptureDelete,
 		PermissionMemberInvite, PermissionMemberRemove, PermissionBillingManage,
+		PermissionWorkspaceManage, PermissionProjectManage,
 	),
 	RoleAdmin: set(
 		PermissionCaptureRead, PermissionCaptureWrite, PermissionCaptureDelete,
 		PermissionMemberInvite, PermissionMemberRemove,
+		PermissionWorkspaceManage, PermissionProjectManage,
 	),
 	RoleMember: set(
 		PermissionCaptureRead, PermissionCaptureWrite,
@@ -74,11 +84,13 @@ func Permissions(role Role) []Permission {
 		return []Permission{
 			PermissionCaptureRead, PermissionCaptureWrite, PermissionCaptureDelete,
 			PermissionMemberInvite, PermissionMemberRemove, PermissionBillingManage,
+			PermissionWorkspaceManage, PermissionProjectManage,
 		}
 	case RoleAdmin:
 		return []Permission{
 			PermissionCaptureRead, PermissionCaptureWrite, PermissionCaptureDelete,
 			PermissionMemberInvite, PermissionMemberRemove,
+			PermissionWorkspaceManage, PermissionProjectManage,
 		}
 	case RoleMember:
 		return []Permission{PermissionCaptureRead, PermissionCaptureWrite}

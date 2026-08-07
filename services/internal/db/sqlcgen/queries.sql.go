@@ -528,7 +528,7 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 }
 
 const createWorkspace = `-- name: CreateWorkspace :one
-INSERT INTO workspaces (id, name) VALUES ($1, $2) RETURNING id, name, created_at
+INSERT INTO workspaces (id, name) VALUES ($1, $2) RETURNING id, name, created_at, policy_overrides
 `
 
 type CreateWorkspaceParams struct {
@@ -539,8 +539,39 @@ type CreateWorkspaceParams struct {
 func (q *Queries) CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams) (Workspace, error) {
 	row := q.db.QueryRow(ctx, createWorkspace, arg.ID, arg.Name)
 	var i Workspace
-	err := row.Scan(&i.ID, &i.Name, &i.CreatedAt)
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.CreatedAt,
+		&i.PolicyOverrides,
+	)
 	return i, err
+}
+
+const deleteProjectForWorkspace = `-- name: DeleteProjectForWorkspace :execrows
+DELETE FROM projects WHERE id = $1 AND workspace_id = $2
+`
+
+type DeleteProjectForWorkspaceParams struct {
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
+}
+
+func (q *Queries) DeleteProjectForWorkspace(ctx context.Context, arg DeleteProjectForWorkspaceParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteProjectForWorkspace, arg.ID, arg.WorkspaceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteWorkspace = `-- name: DeleteWorkspace :exec
+DELETE FROM workspaces WHERE id = $1
+`
+
+func (q *Queries) DeleteWorkspace(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, deleteWorkspace, id)
+	return err
 }
 
 const getAsset = `-- name: GetAsset :one
@@ -756,6 +787,32 @@ func (q *Queries) GetMembership(ctx context.Context, id string) (Membership, err
 	return i, err
 }
 
+const getMembershipByWorkspaceAndUser = `-- name: GetMembershipByWorkspaceAndUser :one
+SELECT id, workspace_id, user_id, role, created_at FROM memberships WHERE workspace_id = $1 AND user_id = $2
+`
+
+type GetMembershipByWorkspaceAndUserParams struct {
+	WorkspaceID string `json:"workspace_id"`
+	UserID      string `json:"user_id"`
+}
+
+// The RBAC seam: resolves a caller's role in a workspace without
+// distinguishing "no such workspace" from "not a member" — both are zero
+// rows, and callers must turn that into the same not-found response either
+// way (see internal/authz and sync-gateway/internal/authctx.OIDCMiddleware).
+func (q *Queries) GetMembershipByWorkspaceAndUser(ctx context.Context, arg GetMembershipByWorkspaceAndUserParams) (Membership, error) {
+	row := q.db.QueryRow(ctx, getMembershipByWorkspaceAndUser, arg.WorkspaceID, arg.UserID)
+	var i Membership
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.UserID,
+		&i.Role,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getMutation = `-- name: GetMutation :one
 SELECT id, capture_id, op, payload, client_t, created_at, workspace_id, seq FROM mutations WHERE id = $1
 `
@@ -799,6 +856,30 @@ SELECT id, workspace_id, name, created_at FROM projects WHERE id = $1
 
 func (q *Queries) GetProject(ctx context.Context, id string) (Project, error) {
 	row := q.db.QueryRow(ctx, getProject, id)
+	var i Project
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getProjectForWorkspace = `-- name: GetProjectForWorkspace :one
+SELECT id, workspace_id, name, created_at FROM projects WHERE id = $1 AND workspace_id = $2
+`
+
+type GetProjectForWorkspaceParams struct {
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
+}
+
+// Scoped by workspace_id so a project ID belonging to another workspace
+// returns pgx.ErrNoRows rather than another workspace's data — the
+// non-disclosing cross-workspace read.
+func (q *Queries) GetProjectForWorkspace(ctx context.Context, arg GetProjectForWorkspaceParams) (Project, error) {
+	row := q.db.QueryRow(ctx, getProjectForWorkspace, arg.ID, arg.WorkspaceID)
 	var i Project
 	err := row.Scan(
 		&i.ID,
@@ -861,13 +942,44 @@ func (q *Queries) GetUser(ctx context.Context, id string) (User, error) {
 }
 
 const getWorkspace = `-- name: GetWorkspace :one
-SELECT id, name, created_at FROM workspaces WHERE id = $1
+SELECT id, name, created_at, policy_overrides FROM workspaces WHERE id = $1
 `
 
 func (q *Queries) GetWorkspace(ctx context.Context, id string) (Workspace, error) {
 	row := q.db.QueryRow(ctx, getWorkspace, id)
 	var i Workspace
-	err := row.Scan(&i.ID, &i.Name, &i.CreatedAt)
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.CreatedAt,
+		&i.PolicyOverrides,
+	)
+	return i, err
+}
+
+const getWorkspaceForMember = `-- name: GetWorkspaceForMember :one
+SELECT w.id, w.name, w.created_at, w.policy_overrides FROM workspaces w
+JOIN memberships m ON m.workspace_id = w.id
+WHERE w.id = $1 AND m.user_id = $2
+`
+
+type GetWorkspaceForMemberParams struct {
+	ID     string `json:"id"`
+	UserID string `json:"user_id"`
+}
+
+// Same no-existence-leak shape as GetProjectForWorkspace/GetAssetForWorkspace:
+// a workspace id the caller isn't a member of returns pgx.ErrNoRows
+// identically to a workspace id that doesn't exist at all.
+func (q *Queries) GetWorkspaceForMember(ctx context.Context, arg GetWorkspaceForMemberParams) (Workspace, error) {
+	row := q.db.QueryRow(ctx, getWorkspaceForMember, arg.ID, arg.UserID)
+	var i Workspace
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.CreatedAt,
+		&i.PolicyOverrides,
+	)
 	return i, err
 }
 
@@ -986,6 +1098,67 @@ func (q *Queries) ListMutationsSinceRevision(ctx context.Context, arg ListMutati
 			&i.CreatedAt,
 			&i.WorkspaceID,
 			&i.Seq,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listProjectsByWorkspace = `-- name: ListProjectsByWorkspace :many
+SELECT id, workspace_id, name, created_at FROM projects WHERE workspace_id = $1 ORDER BY created_at
+`
+
+func (q *Queries) ListProjectsByWorkspace(ctx context.Context, workspaceID string) ([]Project, error) {
+	rows, err := q.db.Query(ctx, listProjectsByWorkspace, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Project
+	for rows.Next() {
+		var i Project
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Name,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listWorkspacesForUser = `-- name: ListWorkspacesForUser :many
+SELECT w.id, w.name, w.created_at, w.policy_overrides FROM workspaces w
+JOIN memberships m ON m.workspace_id = w.id
+WHERE m.user_id = $1
+ORDER BY w.created_at
+`
+
+func (q *Queries) ListWorkspacesForUser(ctx context.Context, userID string) ([]Workspace, error) {
+	rows, err := q.db.Query(ctx, listWorkspacesForUser, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Workspace
+	for rows.Next() {
+		var i Workspace
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.CreatedAt,
+			&i.PolicyOverrides,
 		); err != nil {
 			return nil, err
 		}
@@ -1147,6 +1320,70 @@ func (q *Queries) UpdateCaptureRevisionAndDoc(ctx context.Context, arg UpdateCap
 	return i, err
 }
 
+const updateProjectForWorkspace = `-- name: UpdateProjectForWorkspace :one
+UPDATE projects SET name = $3 WHERE id = $1 AND workspace_id = $2 RETURNING id, workspace_id, name, created_at
+`
+
+type UpdateProjectForWorkspaceParams struct {
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
+	Name        string `json:"name"`
+}
+
+func (q *Queries) UpdateProjectForWorkspace(ctx context.Context, arg UpdateProjectForWorkspaceParams) (Project, error) {
+	row := q.db.QueryRow(ctx, updateProjectForWorkspace, arg.ID, arg.WorkspaceID, arg.Name)
+	var i Project
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const updateWorkspace = `-- name: UpdateWorkspace :one
+UPDATE workspaces SET name = $2 WHERE id = $1 RETURNING id, name, created_at, policy_overrides
+`
+
+type UpdateWorkspaceParams struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+func (q *Queries) UpdateWorkspace(ctx context.Context, arg UpdateWorkspaceParams) (Workspace, error) {
+	row := q.db.QueryRow(ctx, updateWorkspace, arg.ID, arg.Name)
+	var i Workspace
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.CreatedAt,
+		&i.PolicyOverrides,
+	)
+	return i, err
+}
+
+const updateWorkspacePolicyOverrides = `-- name: UpdateWorkspacePolicyOverrides :one
+UPDATE workspaces SET policy_overrides = $2 WHERE id = $1 RETURNING id, name, created_at, policy_overrides
+`
+
+type UpdateWorkspacePolicyOverridesParams struct {
+	ID              string `json:"id"`
+	PolicyOverrides []byte `json:"policy_overrides"`
+}
+
+func (q *Queries) UpdateWorkspacePolicyOverrides(ctx context.Context, arg UpdateWorkspacePolicyOverridesParams) (Workspace, error) {
+	row := q.db.QueryRow(ctx, updateWorkspacePolicyOverrides, arg.ID, arg.PolicyOverrides)
+	var i Workspace
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.CreatedAt,
+		&i.PolicyOverrides,
+	)
+	return i, err
+}
+
 const upsertAssetForUpload = `-- name: UpsertAssetForUpload :one
 INSERT INTO assets (id, capture_id, kind, mime_type, size_bytes, chunk_count, sha256, object_key)
 VALUES ($1, $2, $3, $4, $5, 0, NULL, $6)
@@ -1225,6 +1462,33 @@ func (q *Queries) UpsertCaptureFieldVersion(ctx context.Context, arg UpsertCaptu
 		&i.ServerT,
 		&i.Revision,
 		&i.MutationID,
+	)
+	return i, err
+}
+
+const upsertUser = `-- name: UpsertUser :one
+INSERT INTO users (id, email, name) VALUES ($1, $2, $3)
+ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email, name = EXCLUDED.name
+RETURNING id, email, name, created_at
+`
+
+type UpsertUserParams struct {
+	ID    string `json:"id"`
+	Email string `json:"email"`
+	Name  string `json:"name"`
+}
+
+// Identity is minted by the IdP (the OIDC subject), not by us, so first
+// login upserts a local user row keyed on that subject rather than
+// inserting and failing on conflict.
+func (q *Queries) UpsertUser(ctx context.Context, arg UpsertUserParams) (User, error) {
+	row := q.db.QueryRow(ctx, upsertUser, arg.ID, arg.Email, arg.Name)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.Name,
+		&i.CreatedAt,
 	)
 	return i, err
 }

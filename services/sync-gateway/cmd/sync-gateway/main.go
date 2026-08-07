@@ -16,7 +16,9 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 
 	"github.com/dhiazfathra/how-to-replicate/proto/gen/go/sync/v1/syncv1connect"
+	"github.com/dhiazfathra/how-to-replicate/services/internal/auth"
 	"github.com/dhiazfathra/how-to-replicate/services/internal/db"
+	"github.com/dhiazfathra/how-to-replicate/services/internal/db/sqlcgen"
 	"github.com/dhiazfathra/how-to-replicate/services/internal/httpx"
 	htrotel "github.com/dhiazfathra/how-to-replicate/services/internal/otel"
 	"github.com/dhiazfathra/how-to-replicate/services/internal/storage"
@@ -76,10 +78,15 @@ func run() error {
 		Membership: realtime.NewMembershipStore(),
 	}
 
+	authMiddleware, err := newAuthMiddleware(ctx, pool)
+	if err != nil {
+		return err
+	}
+
 	router := httpx.NewRouter(serviceName, slog.Default())
 	path, connectHandler := syncv1connect.NewSyncServiceHandler(svc)
-	router.Mount(path, authctx.HeaderMiddleware(connectHandler))
-	router.Handle("/v1/sync/deltas/ws", authctx.HeaderMiddleware(wsHandler))
+	router.Mount(path, authMiddleware(connectHandler))
+	router.Handle("/v1/sync/deltas/ws", authMiddleware(wsHandler))
 
 	addr := os.Getenv("HTR_LISTEN_ADDR")
 	if addr == "" {
@@ -97,6 +104,32 @@ func run() error {
 		return err
 	}
 	return nil
+}
+
+// newAuthMiddleware builds the real OIDC bearer-token middleware when
+// HTR_OIDC_ISSUER is configured. Without it, it falls back to
+// authctx.HeaderMiddleware, which trusts client-supplied identity headers
+// — acceptable only for local dev and tests, never for a deployment
+// reachable by untrusted callers.
+func newAuthMiddleware(ctx context.Context, pool db.Pool) (func(http.Handler) http.Handler, error) {
+	issuer := os.Getenv("HTR_OIDC_ISSUER")
+	if issuer == "" {
+		slog.Warn("sync-gateway: HTR_OIDC_ISSUER unset, using dev header auth seam")
+		return authctx.HeaderMiddleware, nil
+	}
+
+	clientID := os.Getenv("HTR_OIDC_CLIENT_ID")
+	_, verifier, err := auth.NewOAuth2Config(ctx, issuer, clientID, "", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	queries := sqlcgen.New(pool.(interface {
+		sqlcgen.DBTX
+	}))
+	resolver := authctx.DBMembershipResolver{Queries: queries}
+
+	return authctx.OIDCMiddleware(verifier, resolver), nil
 }
 
 // newObjectStore wires the asset-upload object store against ADR-011's

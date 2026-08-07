@@ -153,7 +153,8 @@ type User struct {
 }
 
 type Workspace struct {
-	ID        string             `json:"id"`
-	Name      string             `json:"name"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	ID              string             `json:"id"`
+	Name            string             `json:"name"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	PolicyOverrides []byte             `json:"policy_overrides"`
 }

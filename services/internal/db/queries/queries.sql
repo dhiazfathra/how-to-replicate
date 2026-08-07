@@ -4,11 +4,49 @@ INSERT INTO workspaces (id, name) VALUES ($1, $2) RETURNING *;
 -- name: GetWorkspace :one
 SELECT * FROM workspaces WHERE id = $1;
 
+-- name: UpdateWorkspace :one
+UPDATE workspaces SET name = $2 WHERE id = $1 RETURNING *;
+
+-- name: DeleteWorkspace :exec
+DELETE FROM workspaces WHERE id = $1;
+
+-- name: ListWorkspacesForUser :many
+SELECT w.* FROM workspaces w
+JOIN memberships m ON m.workspace_id = w.id
+WHERE m.user_id = $1
+ORDER BY w.created_at;
+
+-- Same no-existence-leak shape as GetProjectForWorkspace/GetAssetForWorkspace:
+-- a workspace id the caller isn't a member of returns pgx.ErrNoRows
+-- identically to a workspace id that doesn't exist at all.
+-- name: GetWorkspaceForMember :one
+SELECT w.* FROM workspaces w
+JOIN memberships m ON m.workspace_id = w.id
+WHERE w.id = $1 AND m.user_id = $2;
+
+-- name: UpdateWorkspacePolicyOverrides :one
+UPDATE workspaces SET policy_overrides = $2 WHERE id = $1 RETURNING *;
+
 -- name: CreateProject :one
 INSERT INTO projects (id, workspace_id, name) VALUES ($1, $2, $3) RETURNING *;
 
 -- name: GetProject :one
 SELECT * FROM projects WHERE id = $1;
+
+-- Scoped by workspace_id so a project ID belonging to another workspace
+-- returns pgx.ErrNoRows rather than another workspace's data — the
+-- non-disclosing cross-workspace read.
+-- name: GetProjectForWorkspace :one
+SELECT * FROM projects WHERE id = $1 AND workspace_id = $2;
+
+-- name: ListProjectsByWorkspace :many
+SELECT * FROM projects WHERE workspace_id = $1 ORDER BY created_at;
+
+-- name: UpdateProjectForWorkspace :one
+UPDATE projects SET name = $3 WHERE id = $1 AND workspace_id = $2 RETURNING *;
+
+-- name: DeleteProjectForWorkspace :execrows
+DELETE FROM projects WHERE id = $1 AND workspace_id = $2;
 
 -- name: CreateUser :one
 INSERT INTO users (id, email, name) VALUES ($1, $2, $3) RETURNING *;
@@ -16,11 +54,26 @@ INSERT INTO users (id, email, name) VALUES ($1, $2, $3) RETURNING *;
 -- name: GetUser :one
 SELECT * FROM users WHERE id = $1;
 
+-- Identity is minted by the IdP (the OIDC subject), not by us, so first
+-- login upserts a local user row keyed on that subject rather than
+-- inserting and failing on conflict.
+-- name: UpsertUser :one
+INSERT INTO users (id, email, name) VALUES ($1, $2, $3)
+ON CONFLICT (id) DO UPDATE SET email = EXCLUDED.email, name = EXCLUDED.name
+RETURNING *;
+
 -- name: CreateMembership :one
 INSERT INTO memberships (id, workspace_id, user_id, role) VALUES ($1, $2, $3, $4) RETURNING *;
 
 -- name: GetMembership :one
 SELECT * FROM memberships WHERE id = $1;
+
+-- The RBAC seam: resolves a caller's role in a workspace without
+-- distinguishing "no such workspace" from "not a member" — both are zero
+-- rows, and callers must turn that into the same not-found response either
+-- way (see internal/authz and sync-gateway/internal/authctx.OIDCMiddleware).
+-- name: GetMembershipByWorkspaceAndUser :one
+SELECT * FROM memberships WHERE workspace_id = $1 AND user_id = $2;
 
 -- name: CreateRedactionRuleset :one
 INSERT INTO redaction_rulesets (version, workspace_id, rules) VALUES ($1, $2, $3) RETURNING *;
