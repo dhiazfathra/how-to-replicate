@@ -150,6 +150,18 @@ func (g *Gateway) RequestAssetUpload(
 			return fmt.Errorf("gateway: upsert asset: %w", err)
 		}
 
+		// Adding/repointing an asset can only ever invalidate completeness
+		// (a fresh or re-requested asset is unverified), so recompute and
+		// persist manifest_complete in the same transaction as the upsert —
+		// never as a follow-up call that could race or be skipped.
+		complete, err := s.ManifestComplete(ctx, captureID)
+		if err != nil {
+			return fmt.Errorf("gateway: check manifest complete: %w", err)
+		}
+		if err := s.SetCaptureManifestComplete(ctx, captureID, complete); err != nil {
+			return fmt.Errorf("gateway: set manifest complete: %w", err)
+		}
+
 		expiry := presignExpiryFor(sizeBytes)
 		expiresAt := g.now().Add(expiry)
 

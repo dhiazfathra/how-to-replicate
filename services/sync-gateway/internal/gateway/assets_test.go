@@ -380,6 +380,24 @@ func TestRequestAssetUpload_InfraErrors(t *testing.T) {
 			t.Fatal("expected error")
 		}
 	})
+	t.Run("manifest complete check error", func(t *testing.T) {
+		store := newFakeStore()
+		seedAssetCapture(store)
+		store.manifestCompleteErr = errors.New("boom")
+		gw := newAssetTestGateway(store, newFakeObjectStore(), time.Unix(0, 0))
+		if _, err := gw.RequestAssetUpload(context.Background(), testWorkspace, testCapture, testAsset, "video/mp4", int64(len(body)), sha256Hex(body)); err == nil {
+			t.Fatal("expected error")
+		}
+	})
+	t.Run("set manifest complete error", func(t *testing.T) {
+		store := newFakeStore()
+		seedAssetCapture(store)
+		store.setManifestErr = errors.New("boom")
+		gw := newAssetTestGateway(store, newFakeObjectStore(), time.Unix(0, 0))
+		if _, err := gw.RequestAssetUpload(context.Background(), testWorkspace, testCapture, testAsset, "video/mp4", int64(len(body)), sha256Hex(body)); err == nil {
+			t.Fatal("expected error")
+		}
+	})
 	t.Run("create presign error", func(t *testing.T) {
 		store := newFakeStore()
 		seedAssetCapture(store)
@@ -436,6 +454,52 @@ func TestCompleteAssetUpload_HappyPath(t *testing.T) {
 	}
 	if !store.manifestComplete[testCapture] {
 		t.Fatalf("expected manifest_complete persisted true")
+	}
+}
+
+// TestRequestAssetUpload_ExtendingManifestAfterCompleteGoesStale guards
+// against manifest_complete going stale after the manifest is extended: once
+// one asset is verified and manifest_complete flips true, requesting a
+// second asset on the same capture must immediately re-flip it false — not
+// leave it stale until the next CompleteAssetUpload — and it must flip back
+// true once that second asset is also verified.
+func TestRequestAssetUpload_ExtendingManifestAfterCompleteGoesStale(t *testing.T) {
+	store := newFakeStore()
+	seedAssetCapture(store)
+	os := newFakeObjectStore()
+	gw := newAssetTestGateway(store, os, time.Unix(0, 0))
+	body := []byte("evidence bytes")
+	requestAndUpload(t, gw, os, body)
+
+	res, err := gw.CompleteAssetUpload(context.Background(), testWorkspace, testCapture, testAsset)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.ManifestComplete || !store.manifestComplete[testCapture] {
+		t.Fatalf("expected manifest complete after sole asset verified, got %+v", res)
+	}
+
+	const secondAsset = "asset_2"
+	body2 := []byte("more evidence")
+	if _, err := gw.RequestAssetUpload(context.Background(), testWorkspace, testCapture, secondAsset, "video/mp4", int64(len(body2)), sha256Hex(body2)); err != nil {
+		t.Fatalf("unexpected error requesting second asset: %v", err)
+	}
+	if store.manifestComplete[testCapture] {
+		t.Fatalf("expected manifest_complete to go false once an unverified second asset is added")
+	}
+
+	res2, err := gw.RequestAssetUpload(context.Background(), testWorkspace, testCapture, secondAsset, "video/mp4", int64(len(body2)), sha256Hex(body2))
+	if err != nil {
+		t.Fatalf("unexpected error re-requesting second asset: %v", err)
+	}
+	os.put(res2.ObjectKey, body2)
+
+	completeRes, err := gw.CompleteAssetUpload(context.Background(), testWorkspace, testCapture, secondAsset)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !completeRes.ManifestComplete || !store.manifestComplete[testCapture] {
+		t.Fatalf("expected manifest complete again once both assets verified, got %+v", completeRes)
 	}
 }
 
