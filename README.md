@@ -121,7 +121,7 @@ pnpm exec playwright install --with-deps chromium
 | Command | What it does |
 |---|---|
 | `pnpm build` | Builds all three clients into their `dist/` folders |
-| `pnpm test` | Unit tests (616, Vitest) |
+| `pnpm test` | Unit tests (669, Vitest, incl. a `fast-check` property suite for sync convergence — see note below) |
 | `pnpm test:coverage` | Unit tests with coverage thresholds enforced |
 | `pnpm e2e` | Builds, then runs the Playwright end-to-end suite in real Chromium |
 | `pnpm e2e:report` | Opens the HTML report from the last e2e run |
@@ -129,6 +129,17 @@ pnpm exec playwright install --with-deps chromium
 | `pnpm lint` | ESLint over packages, clients, e2e, and e2e-nightly |
 | `pnpm typecheck` | `tsc -b` over the workspace, plus the e2e and e2e-nightly projects |
 | `pnpm check:deps` | Enforces invariant 5 — `capture-core` imports nothing from `clients/` |
+
+`packages/capture-core/test/sync-convergence.property.test.ts` currently **fails**
+on `main` — it's a `fast-check` property test proving multi-client sync converges
+under adversarial delivery, and it caught a real bug rather than a test bug: a
+client's own `appendComment` mutation gets duplicated the next time that same
+client calls `pull()`, because `pull()` replays every delta since the last cursor
+with no dedup against mutations the client just pushed itself, and `appendComment`
+(unlike the other ops) isn't idempotent under replay. See
+`.superpowers/sdd/2026-08-04-phase-1-implementation/task-8-report.md` for the
+minimal repro and the fix this implies for `packages/capture-core/src/sync/engine.ts`.
+Do not weaken or skip this test to make it pass — it is correctly red.
 
 ## Go services (Phase 1+)
 
