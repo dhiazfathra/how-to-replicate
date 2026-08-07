@@ -1,0 +1,10 @@
+// Scaffold file so the Buf module has something to lint against before
+// Task 3 lands the real schema and mutation vocabulary. Delete this file
+// once htr.v1 has real messages.
+syntax = "proto3";
+
+package htr.v1;
+
+message Scaffold {
+  string note = 1;
+}

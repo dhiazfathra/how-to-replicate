@@ -84,3 +84,61 @@ jobs:
             e2e/artifacts/videos
             e2e/artifacts/report
           retention-days: 30
+
+  go-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: services/internal/go.mod
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          working-directory: services/internal
+
+  go-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: services/internal/go.mod
+
+      - name: go work sync
+        run: go work sync
+
+      # testsupport is a docker-backed test harness with no business logic;
+      # its own coverage is inherently environment-dependent (docker daemon
+      # failure branches), so it's exercised by callers but excluded from
+      # the 100% gate below. Every other package must hit 100%.
+      - name: Test with coverage
+        working-directory: services/internal
+        run: go test $(go list ./... | grep -v /testsupport) -covermode=atomic -coverprofile=coverage.out
+
+      - name: Enforce 100% coverage
+        working-directory: services/internal
+        run: |
+          go tool cover -func=coverage.out | tee coverage.txt
+          total=$(grep '^total:' coverage.txt | awk '{print $3}' | tr -d '%')
+          echo "total coverage: ${total}%"
+          if awk "BEGIN { exit !($total < 100) }"; then
+            echo "coverage ${total}% is below the required 100%"
+            exit 1
+          fi
+
+  buf-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: bufbuild/buf-action@v1
+        with:
+          working_directory: proto
+          pr_comment: false

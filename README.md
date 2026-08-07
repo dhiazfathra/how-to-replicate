@@ -84,7 +84,9 @@ packages/
 e2e/                  Playwright end-to-end suite (PR-gating) + recorded evidence
 e2e-nightly/          Playwright video-blur OCR job (nightly, slow)
 cli/                  agent-facing CLI (Phase 2 — not built)
-services/             Go services (Phase 1+ — not built)
+proto/                Buf module — API schema, generated Go checked in under proto/gen
+services/             Go workspace (Phase 1+)
+  internal/           shared packages: db, migrate, otel, httpx, storage, authz, testsupport
 docs/
   decisions/          ADRs
   superpowers/specs/  design specs
@@ -126,6 +128,41 @@ pnpm exec playwright install --with-deps chromium
 | `pnpm lint` | ESLint over packages, clients, e2e, and e2e-nightly |
 | `pnpm typecheck` | `tsc -b` over the workspace, plus the e2e and e2e-nightly projects |
 | `pnpm check:deps` | Enforces invariant 5 — `capture-core` imports nothing from `clients/` |
+
+## Go services (Phase 1+)
+
+Requires **Go 1.25+**, the [buf CLI](https://buf.build/docs/installation), and Docker
+(for `testcontainers-go`-backed integration tests). `go.work` at the repo root covers
+`services/*`; `services/internal` is the shared package every service builds inside —
+no service has landed yet.
+
+```bash
+go work sync                       # sync go.work with each module's go.mod
+cd services/internal && go test ./...   # unit + integration tests (docker required for
+                                         # the testcontainers-backed tests in migrate/
+                                         # and storage/storage_integration_test.go —
+                                         # they skip cleanly if no daemon is reachable)
+golangci-lint run ./...            # from services/internal
+```
+
+`services/internal/testsupport` is a docker-backed test harness (Postgres + MinIO via
+testcontainers-go) with no business logic of its own; its coverage is inherently
+environment-dependent, so CI's 100% coverage gate excludes that one package and covers
+everything else.
+
+Proto (Buf module, `proto/`):
+
+```bash
+cd proto
+buf lint
+buf breaking --against '.git#branch=main,subdir=proto'
+buf generate    # regenerates checked-in Go under proto/gen — CI fails on drift
+```
+
+`sqlc.yaml` lives at `services/sqlc.yaml`; once queries exist under
+`services/internal/db/queries`, run `sqlc generate` from `services/` to produce
+type-safe Go under `services/internal/db/sqlcgen`. Migrations are plain SQL run via
+`goose` (`services/internal/migrate`), embedded at build time.
 
 ## Running the extension
 
