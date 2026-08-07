@@ -16,17 +16,21 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/go-chi/chi/v5"
 
+	"github.com/dhiazfathra/how-to-replicate/services/capture-api/internal/sharelink"
 	"github.com/dhiazfathra/how-to-replicate/services/capture-api/internal/store"
 	"github.com/dhiazfathra/how-to-replicate/services/internal/auth"
 	"github.com/dhiazfathra/how-to-replicate/services/internal/authz"
 	"github.com/dhiazfathra/how-to-replicate/services/internal/db"
 )
 
-// NewRouter builds capture-api's chi router. verifier authenticates
-// callers; st holds workspaces/projects/memberships; pool is used directly
-// by createWorkspace for the workspace+owner-membership transaction.
-func NewRouter(verifier *oidc.IDTokenVerifier, st *store.Store, pool db.Pool) chi.Router {
-	h := &handlers{store: st, pool: pool}
+// NewRouter builds capture-api's authenticated chi router. verifier
+// authenticates callers; st holds workspaces/projects/memberships/captures;
+// pool is used directly by createWorkspace for the workspace+owner-membership
+// transaction; signer mints/verifies share-link tokens for the
+// createShareLink/revokeShareLink routes below (resolution itself is
+// unauthenticated — see NewShareRouter).
+func NewRouter(verifier *oidc.IDTokenVerifier, st *store.Store, pool db.Pool, signer sharelink.Signer) chi.Router {
+	h := &handlers{store: st, pool: pool, signer: signer}
 
 	r := chi.NewRouter()
 	r.Use(auth.Middleware(verifier))
@@ -60,15 +64,46 @@ func NewRouter(verifier *oidc.IDTokenVerifier, st *store.Store, pool db.Pool) ch
 					r.With(h.requirePermission(authz.PermissionProjectManage)).Delete("/", h.deleteProject)
 				})
 			})
+
+			// Captures: authenticated reads for share-link viewers' server-side
+			// resolution and for a client whose local copy was evicted — not the
+			// local-first UI's normal read path. See internal/api/captureview.go
+			// for the ready-state gate every one of these routes through.
+			r.Route("/captures", func(r chi.Router) {
+				r.With(h.requirePermission(authz.PermissionCaptureRead)).Get("/", h.listCaptures)
+
+				r.Route("/{captureID}", func(r chi.Router) {
+					r.With(h.requirePermission(authz.PermissionCaptureRead)).Get("/", h.getCapture)
+					r.With(h.requirePermission(authz.PermissionCaptureRead)).Get("/events", h.listEvents)
+					r.With(h.requirePermission(authz.PermissionCaptureWrite)).Post("/comments", h.createComment)
+
+					r.Route("/share-links", func(r chi.Router) {
+						r.With(h.requirePermission(authz.PermissionCaptureWrite)).Post("/", h.createShareLink)
+						r.With(h.requirePermission(authz.PermissionCaptureWrite)).Post("/{shareLinkID}/revoke", h.revokeShareLink)
+					})
+				})
+			})
 		})
 	})
 
 	return r
 }
 
+// NewShareRouter builds capture-api's unauthenticated share-link resolver.
+// It is deliberately not mounted under auth.Middleware (share links are
+// "no-login viewing", per the task brief) and is rate-limited per client
+// IP so a token cannot be brute-forced.
+func NewShareRouter(st *store.Store, signer sharelink.Signer, limiter *sharelink.Limiter) chi.Router {
+	h := &shareHandler{store: st, signer: signer, limiter: limiter}
+	r := chi.NewRouter()
+	r.Get("/v1/share/{token}", h.resolve)
+	return r
+}
+
 type handlers struct {
-	store *store.Store
-	pool  db.Pool
+	store  *store.Store
+	pool   db.Pool
+	signer sharelink.Signer
 }
 
 // requirePermission resolves the caller's role in the {workspaceID} path

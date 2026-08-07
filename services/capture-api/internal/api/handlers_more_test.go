@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/dhiazfathra/how-to-replicate/services/capture-api/internal/sharelink"
 	"github.com/dhiazfathra/how-to-replicate/services/internal/auth"
 	"github.com/dhiazfathra/how-to-replicate/services/internal/db/sqlcgen"
 )
@@ -416,7 +417,7 @@ func TestRequireOwner(t *testing.T) {
 // TestNewRouter smoke-tests that the route tree builds without panicking.
 func TestNewRouter(t *testing.T) {
 	st := newTestHandlers(fakeQuerier{}).store
-	NewRouter(nil, st, nil)
+	NewRouter(nil, st, nil, sharelink.Signer{Current: sharelink.Key{ID: "k1", Secret: []byte("secret")}})
 }
 
 func TestHandleStoreErr(t *testing.T) {

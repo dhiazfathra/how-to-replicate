@@ -8,10 +8,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/dhiazfathra/how-to-replicate/services/capture-api/internal/api"
+	"github.com/dhiazfathra/how-to-replicate/services/capture-api/internal/sharelink"
 	"github.com/dhiazfathra/how-to-replicate/services/capture-api/internal/store"
 	"github.com/dhiazfathra/how-to-replicate/services/internal/auth"
 	"github.com/dhiazfathra/how-to-replicate/services/internal/db"
@@ -55,9 +57,17 @@ func run() error {
 		return err
 	}
 
+	signer, err := shareLinkSigner()
+	if err != nil {
+		return err
+	}
+
 	st := store.New(sqlcgen.New(pool))
+	limiter := &sharelink.Limiter{Max: 20, Window: time.Minute}
+
 	router := httpx.NewRouter(serviceName, slog.Default())
-	router.Mount("/", api.NewRouter(verifier, st, pool))
+	router.Mount("/", api.NewRouter(verifier, st, pool, signer))
+	router.Mount("/", api.NewShareRouter(st, signer, limiter))
 
 	addr := os.Getenv("HTR_LISTEN_ADDR")
 	if addr == "" {
@@ -75,6 +85,30 @@ func run() error {
 		return err
 	}
 	return nil
+}
+
+// shareLinkSigner builds the share-link Signer from environment config:
+// HTR_SHARE_LINK_KEY_ID/HTR_SHARE_LINK_KEY are the current signing key;
+// HTR_SHARE_LINK_PREVIOUS_KEYS is an optional comma-separated list of
+// "id:secret" pairs still accepted for verification during rotation, so an
+// operator can introduce a new current key without invalidating tokens
+// signed under the outgoing one until it's removed here too.
+func shareLinkSigner() (sharelink.Signer, error) {
+	keyID := os.Getenv("HTR_SHARE_LINK_KEY_ID")
+	secret := os.Getenv("HTR_SHARE_LINK_KEY")
+	if keyID == "" || secret == "" {
+		return sharelink.Signer{}, errRequiredEnv("HTR_SHARE_LINK_KEY_ID/HTR_SHARE_LINK_KEY")
+	}
+
+	signer := sharelink.Signer{Current: sharelink.Key{ID: keyID, Secret: []byte(secret)}}
+	for _, pair := range strings.Split(os.Getenv("HTR_SHARE_LINK_PREVIOUS_KEYS"), ",") {
+		id, sec, ok := strings.Cut(pair, ":")
+		if !ok || id == "" || sec == "" {
+			continue
+		}
+		signer.Previous = append(signer.Previous, sharelink.Key{ID: id, Secret: []byte(sec)})
+	}
+	return signer, nil
 }
 
 type errRequiredEnv string

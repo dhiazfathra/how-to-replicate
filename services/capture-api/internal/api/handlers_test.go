@@ -30,6 +30,77 @@ type fakeQuerier struct {
 	membership sqlcgen.Membership
 	memberOK   bool
 	err        error
+
+	capture       sqlcgen.Capture
+	captureOK     bool
+	captures      []sqlcgen.CaptureEvent
+	comment       sqlcgen.Comment
+	shareLink     sqlcgen.ShareLink
+	shareLinkOK   bool
+	auditLogCount *int
+	eventsErr     error
+	auditErr      error
+}
+
+func (f fakeQuerier) GetCaptureForWorkspace(context.Context, sqlcgen.GetCaptureForWorkspaceParams) (sqlcgen.Capture, error) {
+	if f.err != nil {
+		return sqlcgen.Capture{}, f.err
+	}
+	if !f.captureOK {
+		return sqlcgen.Capture{}, pgx.ErrNoRows
+	}
+	return f.capture, nil
+}
+func (f fakeQuerier) GetCapture(context.Context, string) (sqlcgen.Capture, error) {
+	if f.err != nil {
+		return sqlcgen.Capture{}, f.err
+	}
+	if !f.captureOK {
+		return sqlcgen.Capture{}, pgx.ErrNoRows
+	}
+	return f.capture, nil
+}
+func (f fakeQuerier) ListCapturesByWorkspace(context.Context, string) ([]sqlcgen.Capture, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if !f.captureOK {
+		return nil, nil
+	}
+	return []sqlcgen.Capture{f.capture}, nil
+}
+func (f fakeQuerier) ListCaptureEventsByCapture(context.Context, string) ([]sqlcgen.CaptureEvent, error) {
+	if f.eventsErr != nil {
+		return nil, f.eventsErr
+	}
+	return f.captures, f.err
+}
+func (f fakeQuerier) CreateComment(context.Context, sqlcgen.CreateCommentParams) (sqlcgen.Comment, error) {
+	return f.comment, f.err
+}
+func (f fakeQuerier) CreateShareLink(context.Context, sqlcgen.CreateShareLinkParams) (sqlcgen.ShareLink, error) {
+	return f.shareLink, f.err
+}
+func (f fakeQuerier) GetShareLink(context.Context, string) (sqlcgen.ShareLink, error) {
+	if f.err != nil {
+		return sqlcgen.ShareLink{}, f.err
+	}
+	if !f.shareLinkOK {
+		return sqlcgen.ShareLink{}, pgx.ErrNoRows
+	}
+	return f.shareLink, nil
+}
+func (f fakeQuerier) RevokeShareLink(context.Context, string) (sqlcgen.ShareLink, error) {
+	return f.shareLink, f.err
+}
+func (f fakeQuerier) CreateAuditLog(context.Context, sqlcgen.CreateAuditLogParams) (sqlcgen.AuditLog, error) {
+	if f.auditErr != nil {
+		return sqlcgen.AuditLog{}, f.auditErr
+	}
+	if f.auditLogCount != nil {
+		*f.auditLogCount++
+	}
+	return sqlcgen.AuditLog{}, f.err
 }
 
 func (f fakeQuerier) GetWorkspace(context.Context, string) (sqlcgen.Workspace, error) {

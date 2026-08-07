@@ -3,8 +3,10 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/dhiazfathra/how-to-replicate/services/capture-api/internal/policy"
 	"github.com/dhiazfathra/how-to-replicate/services/capture-api/internal/store"
@@ -197,4 +199,146 @@ func (h *handlers) updatePolicy(w http.ResponseWriter, r *http.Request) {
 	var resolved policy.Overrides
 	_ = json.Unmarshal(ws.PolicyOverrides, &resolved)
 	writeJSON(w, http.StatusOK, policy.Resolve(policy.Defaults, resolved))
+}
+
+// getCapture is an authenticated read for share-link viewers' server-side
+// resolution and for a client whose local copy was evicted — not the
+// local-first UI's normal read path, which reads its own observable store.
+// Every non-ready capture is gated down to status metadata by gateCapture,
+// the one place invariant 1 ("no unredacted capture is viewable... the gate
+// is state === 'ready'") is enforced.
+func (h *handlers) getCapture(w http.ResponseWriter, r *http.Request) {
+	c, err := h.store.GetCapture(r.Context(), chi.URLParam(r, "captureID"), chi.URLParam(r, "workspaceID"))
+	if err != nil {
+		handleStoreErr(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, gateCapture(c))
+}
+
+// listCaptures returns every capture in the workspace, each individually
+// gated through gateCapture — a non-ready capture in the list is status
+// metadata only, same as a direct getCapture on it would be.
+func (h *handlers) listCaptures(w http.ResponseWriter, r *http.Request) {
+	cs, err := h.store.ListCaptures(r.Context(), chi.URLParam(r, "workspaceID"))
+	if err != nil {
+		handleStoreErr(w, r, err)
+		return
+	}
+	views := make([]CaptureView, 0, len(cs))
+	for _, c := range cs {
+		views = append(views, gateCapture(c))
+	}
+	writeJSON(w, http.StatusOK, views)
+}
+
+// listEvents returns a capture's events, but only if the capture is ready
+// (gateCaptureEvents) — for any other state it returns an empty list
+// rather than the raw (possibly unredacted) event payloads.
+func (h *handlers) listEvents(w http.ResponseWriter, r *http.Request) {
+	captureID := chi.URLParam(r, "captureID")
+	workspaceID := chi.URLParam(r, "workspaceID")
+
+	c, err := h.store.GetCapture(r.Context(), captureID, workspaceID)
+	if err != nil {
+		handleStoreErr(w, r, err)
+		return
+	}
+	evs, err := h.store.ListEvents(r.Context(), captureID, workspaceID)
+	if err != nil {
+		handleStoreErr(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, gateCaptureEvents(c, evs))
+}
+
+type commentRequest struct {
+	Body string `json:"body"`
+}
+
+// createComment appends a comment to a capture, after the store verifies
+// the capture belongs to this workspace (append-only, workspace-scoped —
+// see internal/store.Store.CreateComment).
+func (h *handlers) createComment(w http.ResponseWriter, r *http.Request) {
+	subject, ok := auth.Subject(r.Context())
+	if !ok {
+		http.Error(w, "unauthenticated", http.StatusUnauthorized)
+		return
+	}
+
+	var req commentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Body == "" {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+
+	c, err := h.store.CreateComment(r.Context(), newID(),
+		chi.URLParam(r, "captureID"), chi.URLParam(r, "workspaceID"), subject, req.Body)
+	if err != nil {
+		handleStoreErr(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, c)
+}
+
+type shareLinkRequest struct {
+	// ExpiresInSeconds is required and > 0: a share link with no expiry
+	// would contradict "signed, expiring, revocable" (see task brief).
+	ExpiresInSeconds int64 `json:"expiresInSeconds"`
+}
+
+type shareLinkResponse struct {
+	ID        string    `json:"id"`
+	Token     string    `json:"token"`
+	ExpiresAt time.Time `json:"expiresAt"`
+}
+
+// createShareLink mints a signed, expiring share link for a capture the
+// caller's workspace owns. The signed token embeds the share link's own
+// (random) ID as the revocation handle, not the capture ID — see
+// internal/sharelink's package doc for why.
+func (h *handlers) createShareLink(w http.ResponseWriter, r *http.Request) {
+	subject, ok := auth.Subject(r.Context())
+	if !ok {
+		http.Error(w, "unauthenticated", http.StatusUnauthorized)
+		return
+	}
+
+	var req shareLinkRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ExpiresInSeconds <= 0 {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+
+	captureID := chi.URLParam(r, "captureID")
+	workspaceID := chi.URLParam(r, "workspaceID")
+	expiresAt := time.Now().Add(time.Duration(req.ExpiresInSeconds) * time.Second)
+
+	id := newID()
+	// sharelink.Signer.Sign only fails via json.Marshal on a plain struct of
+	// strings/ints, which cannot fail (see its doc comment) — no error
+	// branch here to test.
+	token, _ := h.signer.Sign(id, captureID, expiresAt)
+
+	sl, err := h.store.CreateShareLink(r.Context(), id, captureID, workspaceID, subject, token,
+		pgtype.Timestamptz{Time: expiresAt, Valid: true})
+	if err != nil {
+		handleStoreErr(w, r, err)
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, shareLinkResponse{ID: sl.ID, Token: token, ExpiresAt: expiresAt})
+}
+
+// revokeShareLink revokes a share link belonging to a capture in the
+// caller's workspace. Revocation is immediate: the resolver checks
+// revoked_at on every resolution, so it does not depend on the token's own
+// (independent) expiry.
+func (h *handlers) revokeShareLink(w http.ResponseWriter, r *http.Request) {
+	_, err := h.store.RevokeShareLink(r.Context(), chi.URLParam(r, "shareLinkID"), chi.URLParam(r, "workspaceID"))
+	if err != nil {
+		handleStoreErr(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
