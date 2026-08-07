@@ -45,13 +45,14 @@ func (s *pgStore) LockCaptureForWorkspace(ctx context.Context, captureID, worksp
 	return Capture{ID: row.ID, WorkspaceID: row.WorkspaceID, Revision: row.Revision, Doc: row.Doc}, true, nil
 }
 
-func (s *pgStore) InsertMutationIfNew(ctx context.Context, mutationID, captureID, op string, payload []byte, clientT int64) (bool, error) {
+func (s *pgStore) InsertMutationIfNew(ctx context.Context, mutationID, captureID, workspaceID, op string, payload []byte, clientT int64) (bool, error) {
 	_, err := s.q.InsertMutationIfNew(ctx, sqlcgen.InsertMutationIfNewParams{
-		ID:        mutationID,
-		CaptureID: captureID,
-		Op:        op,
-		Payload:   payload,
-		ClientT:   clientT,
+		ID:          mutationID,
+		CaptureID:   captureID,
+		WorkspaceID: workspaceID,
+		Op:          op,
+		Payload:     payload,
+		ClientT:     clientT,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -60,6 +61,32 @@ func (s *pgStore) InsertMutationIfNew(ctx context.Context, mutationID, captureID
 		return false, fmt.Errorf("pgstore: insert mutation: %w", err)
 	}
 	return true, nil
+}
+
+// PullMutationsSince backs Gateway.PullDeltas. since+1 semantics ("seq >
+// since") live in the query itself; limit is passed as page-size+1 by the
+// caller so it can detect has_more.
+func (s *pgStore) PullMutationsSince(ctx context.Context, workspaceID string, since int64, limit int32) ([]DeltaMutation, error) {
+	rows, err := s.q.ListMutationsSinceRevision(ctx, sqlcgen.ListMutationsSinceRevisionParams{
+		WorkspaceID: workspaceID,
+		Seq:         pgtype.Int8{Int64: since, Valid: true},
+		Limit:       limit,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("pgstore: list mutations since revision: %w", err)
+	}
+	out := make([]DeltaMutation, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, DeltaMutation{
+			Seq:       row.Seq.Int64,
+			ID:        row.ID,
+			CaptureID: row.CaptureID,
+			Op:        row.Op,
+			Payload:   row.Payload,
+			ClientT:   row.ClientT,
+		})
+	}
+	return out, nil
 }
 
 func (s *pgStore) FieldVersion(ctx context.Context, captureID, field string) (FieldVersion, bool, error) {

@@ -61,9 +61,17 @@ type Querier interface {
 	// reasoning as CreateMutation above), it just makes a duplicate insert a
 	// no-op instead of a unique-violation error. sqlc's :one returns
 	// pgx.ErrNoRows when the conflict fires with nothing to return, which
-	// callers read as "already applied, do not reprocess".
+	// callers read as "already applied, do not reprocess". workspace_id is
+	// stamped here (Task 6) so PullDeltas can filter the delta log without a
+	// join back to captures.
 	InsertMutationIfNew(ctx context.Context, arg InsertMutationIfNewParams) (Mutation, error)
 	ListCaptureEventsByCapture(ctx context.Context, captureID string) ([]CaptureEvent, error)
+	// Task 6's delta log: every mutation applied in workspace_id with seq >
+	// since, ordered by seq so a client resumes exactly where it left off
+	// regardless of which capture each mutation touched. limit is passed as
+	// requested-page-size+1 by the caller so it can detect has_more without a
+	// second COUNT query.
+	ListMutationsSinceRevision(ctx context.Context, arg ListMutationsSinceRevisionParams) ([]Mutation, error)
 	// Workspace and existence are checked in one predicate so a mutation
 	// naming a capture outside the caller's workspace fails the same way as a
 	// mutation naming a capture that doesn't exist at all — the caller cannot

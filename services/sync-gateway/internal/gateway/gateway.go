@@ -65,6 +65,13 @@ type Gateway struct {
 	// Storage issues and verifies asset-upload presigns (Task 5). Nil unless
 	// the caller wires RequestAssetUpload/CompleteAssetUpload.
 	Storage ObjectStore
+
+	// OnCommit is called with workspaceID after a mutation is durably
+	// applied (not on a replay short-circuit, since no new delta exists
+	// then). Task 6 wires this to the in-process fan-out hub's Notify so a
+	// connected WebSocket wakes as soon as a new revision lands; nil is a
+	// valid no-op for callers that don't need fan-out (e.g. most tests).
+	OnCommit func(workspaceID string)
 }
 
 func (g *Gateway) now() time.Time {
@@ -100,6 +107,7 @@ func (g *Gateway) applyOne(ctx context.Context, workspaceID, actorID string, m *
 
 	serverT := g.now()
 	var result Result
+	var committedNewDelta bool
 
 	err := g.WithinTx(ctx, func(ctx context.Context, s Store) error {
 		capture, found, err := s.LockCaptureForWorkspace(ctx, m.GetCaptureId(), workspaceID)
@@ -113,11 +121,12 @@ func (g *Gateway) applyOne(ctx context.Context, workspaceID, actorID string, m *
 
 		// value is always a string, []string, or commentValue (decodeOp's
 		// closed output set) — none of which json.Marshal can fail on, so
-		// the error is not worth a branch. payload is audit data only; it
-		// is never read back and parsed by this service.
+		// the error is not worth a branch. payload doubles as this
+		// mutation's entry in the delta log (Task 6's PullDeltas decodes it
+		// back via decodePayload), so its shape must round-trip exactly.
 		payload, _ := json.Marshal(value)
 
-		inserted, err := s.InsertMutationIfNew(ctx, m.GetId(), capture.ID, opName(m), payload, m.GetClientT())
+		inserted, err := s.InsertMutationIfNew(ctx, m.GetId(), capture.ID, workspaceID, opName(m), payload, m.GetClientT())
 		if err != nil {
 			return fmt.Errorf("gateway: insert mutation: %w", err)
 		}
@@ -129,13 +138,18 @@ func (g *Gateway) applyOne(ctx context.Context, workspaceID, actorID string, m *
 			result = Result{MutationID: m.GetId(), Applied: true, Reason: ReasonNone}
 			return nil
 		}
+		// inserted==true from here on: this call is the one durable write
+		// for m.GetId(), so it is exactly the set of commits a fan-out
+		// subscriber needs to hear about. A replay (inserted==false, above)
+		// produces no new delta and must not wake subscribers again.
+		committedNewDelta = true
 
 		newRevision := capture.Revision + 1
 
 		if isAppend {
 			// Safe: decodeOp only sets isAppend=true alongside a commentValue.
 			comment := value.(commentValue)
-			if err := s.InsertComment(ctx, comment.id, capture.ID, actorID, comment.body); err != nil {
+			if err := s.InsertComment(ctx, comment.ID, capture.ID, actorID, comment.Body); err != nil {
 				return fmt.Errorf("gateway: insert comment: %w", err)
 			}
 			if err := s.UpdateCaptureRevisionAndDoc(ctx, capture.ID, newRevision, capture.Doc); err != nil {
@@ -175,6 +189,9 @@ func (g *Gateway) applyOne(ctx context.Context, workspaceID, actorID string, m *
 	if err != nil {
 		return Result{}, err
 	}
+	if committedNewDelta && g.OnCommit != nil {
+		g.OnCommit(workspaceID)
+	}
 	return result, nil
 }
 
@@ -206,8 +223,8 @@ func decodeOp(m *syncv1.Mutation) (field string, value any, isAppend, ok bool) {
 		return fieldAssignment, op.Assign.GetAssigneeUserId(), false, true
 	case *syncv1.Mutation_AppendComment:
 		return "", commentValue{
-			id:   op.AppendComment.GetCommentId(),
-			body: op.AppendComment.GetBody(),
+			ID:   op.AppendComment.GetCommentId(),
+			Body: op.AppendComment.GetBody(),
 		}, true, op.AppendComment.GetCommentId() != ""
 	default:
 		return "", nil, false, false
@@ -233,10 +250,14 @@ func opName(m *syncv1.Mutation) string {
 
 // commentValue carries an AppendComment's fields through decodeOp's value
 // slot. The author is not carried here — it's the RPC caller's identity
-// (internal/authctx), threaded in separately as actorID.
+// (internal/authctx), threaded in separately as actorID. Fields are
+// exported with json tags (unlike a private struct, which encoding/json
+// silently marshals as "{}") because Task 6's PullDeltas reads payload
+// back to reconstruct the original mutation — it is no longer audit-only
+// write-side data.
 type commentValue struct {
-	id   string
-	body string
+	ID   string `json:"comment_id"`
+	Body string `json:"body"`
 }
 
 // setDocField sets field to value inside a capture's JSON doc, returning

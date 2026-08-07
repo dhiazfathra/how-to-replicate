@@ -103,12 +103,14 @@ type Membership struct {
 }
 
 type Mutation struct {
-	ID        string             `json:"id"`
-	CaptureID string             `json:"capture_id"`
-	Op        string             `json:"op"`
-	Payload   []byte             `json:"payload"`
-	ClientT   int64              `json:"client_t"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	ID          string             `json:"id"`
+	CaptureID   string             `json:"capture_id"`
+	Op          string             `json:"op"`
+	Payload     []byte             `json:"payload"`
+	ClientT     int64              `json:"client_t"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	WorkspaceID string             `json:"workspace_id"`
+	Seq         pgtype.Int8        `json:"seq"`
 }
 
 type Outbox struct {

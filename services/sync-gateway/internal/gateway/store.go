@@ -37,8 +37,16 @@ type Store interface {
 	// InsertMutationIfNew records mutationID durably and reports whether
 	// this call is the one that inserted it. inserted=false means a prior
 	// call already applied this exact mutation ID — the caller must not
-	// reprocess it.
-	InsertMutationIfNew(ctx context.Context, mutationID, captureID, op string, payload []byte, clientT int64) (inserted bool, err error)
+	// reprocess it. workspaceID is stamped onto the row (Task 6) so
+	// PullMutationsSince can filter the delta log without joining back to
+	// captures.
+	InsertMutationIfNew(ctx context.Context, mutationID, captureID, workspaceID, op string, payload []byte, clientT int64) (inserted bool, err error)
+
+	// PullMutationsSince returns every mutation applied in workspaceID with
+	// a sequence number greater than since, ordered by sequence ascending,
+	// capped at limit rows. This is the delta log PullDeltas and the
+	// WebSocket fan-out both read from (Task 6) — see DeltaMutation.
+	PullMutationsSince(ctx context.Context, workspaceID string, since int64, limit int32) ([]DeltaMutation, error)
 
 	// FieldVersion returns the current LWW-winning tuple for field on
 	// captureID, or found=false if the field has never been written.
@@ -94,6 +102,19 @@ type Store interface {
 	// flag — the field client eviction reads (invariant 8), never
 	// lastPushedAt.
 	SetCaptureManifestComplete(ctx context.Context, captureID string, complete bool) error
+}
+
+// DeltaMutation is one row of the delta log: a mutation as recorded in
+// Postgres, with the sequence number PullDeltas pages on. Op/Payload are
+// the same closed vocabulary applyOne wrote (see decodePayload for the
+// reverse of decodeOp/opName).
+type DeltaMutation struct {
+	Seq       int64
+	ID        string
+	CaptureID string
+	Op        string
+	Payload   []byte
+	ClientT   int64
 }
 
 // Asset is the subset of an assets row the gateway needs to issue and

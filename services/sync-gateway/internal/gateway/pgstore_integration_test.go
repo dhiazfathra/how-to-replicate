@@ -203,6 +203,80 @@ func TestPgStore_PushMutations_Integration(t *testing.T) {
 	}
 }
 
+// TestPgStore_PullDeltas_Integration proves Task 6's delta log against real
+// Postgres: mutations.seq/workspace_id are populated correctly by
+// InsertMutationIfNew, and PullMutationsSince's WHERE/ORDER BY/LIMIT round
+// trip through the real driver (pgtype.Int8 in particular — see
+// ListMutationsSinceRevisionParams.Seq), not just the in-memory fake.
+func TestPgStore_PullDeltas_Integration(t *testing.T) {
+	ctx := context.Background()
+	pool, workspaceID := setupRuntimePool(t, ctx)
+	gw := &Gateway{WithinTx: NewTxRunner(pool), Now: func() time.Time { return time.Unix(1700000000, 0) }}
+
+	batch := []*syncv1.Mutation{
+		{Id: "pd1", CaptureId: "cap_int", Op: &syncv1.Mutation_SetTitle{SetTitle: &syncv1.SetTitle{Title: "first"}}},
+		{Id: "pd2", CaptureId: "cap_int", Op: &syncv1.Mutation_SetSummary{SetSummary: &syncv1.SetSummary{Summary: "second"}}},
+		{Id: "pd3", CaptureId: "cap_int", Op: &syncv1.Mutation_AppendComment{AppendComment: &syncv1.AppendComment{CommentId: "pdc1", Body: "third"}}},
+	}
+	if _, err := gw.PushMutations(ctx, workspaceID, "user_int", batch); err != nil {
+		t.Fatalf("PushMutations: %v", err)
+	}
+
+	all, revision, hasMore, err := gw.PullDeltas(ctx, workspaceID, 0, 0)
+	if err != nil {
+		t.Fatalf("PullDeltas: %v", err)
+	}
+	if hasMore {
+		t.Fatalf("want hasMore=false for 3 rows under the default limit")
+	}
+	if len(all) != 3 || all[0].GetId() != "pd1" || all[1].GetId() != "pd2" || all[2].GetId() != "pd3" {
+		t.Fatalf("want [pd1 pd2 pd3] in order, got %+v", all)
+	}
+	if all[2].GetAppendComment().GetCommentId() != "pdc1" || all[2].GetAppendComment().GetBody() != "third" {
+		t.Fatalf("append_comment did not round-trip through Postgres: %+v", all[2])
+	}
+
+	// since= the last-seen revision must exclude everything already seen —
+	// the core "delta not snapshot" behavior, now against a real cursor.
+	empty, _, _, err := gw.PullDeltas(ctx, workspaceID, revision, 0)
+	if err != nil {
+		t.Fatalf("PullDeltas at head: %v", err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("want no deltas pulling from the current head, got %+v", empty)
+	}
+
+	// A page size smaller than the total sets has_more and stops exactly at
+	// the boundary.
+	page, pageRevision, pageHasMore, err := gw.PullDeltas(ctx, workspaceID, 0, 2)
+	if err != nil {
+		t.Fatalf("PullDeltas paged: %v", err)
+	}
+	if !pageHasMore || len(page) != 2 || page[1].GetId() != "pd2" {
+		t.Fatalf("want a 2-row page with hasMore=true, got page=%+v hasMore=%v", page, pageHasMore)
+	}
+	rest, _, restHasMore, err := gw.PullDeltas(ctx, workspaceID, pageRevision, 2)
+	if err != nil {
+		t.Fatalf("PullDeltas rest of page: %v", err)
+	}
+	if restHasMore || len(rest) != 1 || rest[0].GetId() != "pd3" {
+		t.Fatalf("want the final row with hasMore=false, got rest=%+v hasMore=%v", rest, restHasMore)
+	}
+
+	// A different workspace must see none of these deltas.
+	otherWorkspace, err := sqlcgen.New(pool).CreateWorkspace(ctx, sqlcgen.CreateWorkspaceParams{ID: "ws_int_other", Name: "Other"})
+	if err != nil {
+		t.Fatalf("seed other workspace: %v", err)
+	}
+	isolated, _, _, err := gw.PullDeltas(ctx, otherWorkspace.ID, 0, 0)
+	if err != nil {
+		t.Fatalf("PullDeltas other workspace: %v", err)
+	}
+	if len(isolated) != 0 {
+		t.Fatalf("want no cross-workspace leakage, got %+v", isolated)
+	}
+}
+
 // TestPgStore_ErrorWrapping drives pgStore's methods directly (not through
 // Gateway) with inputs that make the underlying query fail for reasons
 // other than "no rows" — a foreign-key violation, or an already-cancelled
@@ -222,8 +296,14 @@ func TestPgStore_ErrorWrapping(t *testing.T) {
 		}
 	})
 
+	t.Run("PullMutationsSince on a cancelled context", func(t *testing.T) {
+		if _, err := store.PullMutationsSince(cancelled, workspaceID, 0, 10); err == nil {
+			t.Fatalf("want error, got nil")
+		}
+	})
+
 	t.Run("InsertMutationIfNew against a nonexistent capture", func(t *testing.T) {
-		if _, err := store.InsertMutationIfNew(ctx, "mx1", "does_not_exist", "set_title", []byte(`"x"`), 0); err == nil {
+		if _, err := store.InsertMutationIfNew(ctx, "mx1", "does_not_exist", workspaceID, "set_title", []byte(`"x"`), 0); err == nil {
 			t.Fatalf("want FK-violation error, got nil")
 		}
 	})

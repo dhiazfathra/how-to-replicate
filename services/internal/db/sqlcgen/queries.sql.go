@@ -365,7 +365,7 @@ func (q *Queries) CreateMembership(ctx context.Context, arg CreateMembershipPara
 
 const createMutation = `-- name: CreateMutation :one
 INSERT INTO mutations (id, capture_id, op, payload, client_t)
-VALUES ($1, $2, $3, $4, $5) RETURNING id, capture_id, op, payload, client_t, created_at
+VALUES ($1, $2, $3, $4, $5) RETURNING id, capture_id, op, payload, client_t, created_at, workspace_id, seq
 `
 
 type CreateMutationParams struct {
@@ -398,6 +398,8 @@ func (q *Queries) CreateMutation(ctx context.Context, arg CreateMutationParams) 
 		&i.Payload,
 		&i.ClientT,
 		&i.CreatedAt,
+		&i.WorkspaceID,
+		&i.Seq,
 	)
 	return i, err
 }
@@ -755,7 +757,7 @@ func (q *Queries) GetMembership(ctx context.Context, id string) (Membership, err
 }
 
 const getMutation = `-- name: GetMutation :one
-SELECT id, capture_id, op, payload, client_t, created_at FROM mutations WHERE id = $1
+SELECT id, capture_id, op, payload, client_t, created_at, workspace_id, seq FROM mutations WHERE id = $1
 `
 
 func (q *Queries) GetMutation(ctx context.Context, id string) (Mutation, error) {
@@ -768,6 +770,8 @@ func (q *Queries) GetMutation(ctx context.Context, id string) (Mutation, error) 
 		&i.Payload,
 		&i.ClientT,
 		&i.CreatedAt,
+		&i.WorkspaceID,
+		&i.Seq,
 	)
 	return i, err
 }
@@ -868,18 +872,19 @@ func (q *Queries) GetWorkspace(ctx context.Context, id string) (Workspace, error
 }
 
 const insertMutationIfNew = `-- name: InsertMutationIfNew :one
-INSERT INTO mutations (id, capture_id, op, payload, client_t)
-VALUES ($1, $2, $3, $4, $5)
+INSERT INTO mutations (id, capture_id, workspace_id, op, payload, client_t)
+VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (id) DO NOTHING
-RETURNING id, capture_id, op, payload, client_t, created_at
+RETURNING id, capture_id, op, payload, client_t, created_at, workspace_id, seq
 `
 
 type InsertMutationIfNewParams struct {
-	ID        string `json:"id"`
-	CaptureID string `json:"capture_id"`
-	Op        string `json:"op"`
-	Payload   []byte `json:"payload"`
-	ClientT   int64  `json:"client_t"`
+	ID          string `json:"id"`
+	CaptureID   string `json:"capture_id"`
+	WorkspaceID string `json:"workspace_id"`
+	Op          string `json:"op"`
+	Payload     []byte `json:"payload"`
+	ClientT     int64  `json:"client_t"`
 }
 
 // Idempotent variant of CreateMutation used by sync-gateway: ON CONFLICT DO
@@ -887,11 +892,14 @@ type InsertMutationIfNewParams struct {
 // reasoning as CreateMutation above), it just makes a duplicate insert a
 // no-op instead of a unique-violation error. sqlc's :one returns
 // pgx.ErrNoRows when the conflict fires with nothing to return, which
-// callers read as "already applied, do not reprocess".
+// callers read as "already applied, do not reprocess". workspace_id is
+// stamped here (Task 6) so PullDeltas can filter the delta log without a
+// join back to captures.
 func (q *Queries) InsertMutationIfNew(ctx context.Context, arg InsertMutationIfNewParams) (Mutation, error) {
 	row := q.db.QueryRow(ctx, insertMutationIfNew,
 		arg.ID,
 		arg.CaptureID,
+		arg.WorkspaceID,
 		arg.Op,
 		arg.Payload,
 		arg.ClientT,
@@ -904,6 +912,8 @@ func (q *Queries) InsertMutationIfNew(ctx context.Context, arg InsertMutationIfN
 		&i.Payload,
 		&i.ClientT,
 		&i.CreatedAt,
+		&i.WorkspaceID,
+		&i.Seq,
 	)
 	return i, err
 }
@@ -929,6 +939,53 @@ func (q *Queries) ListCaptureEventsByCapture(ctx context.Context, captureID stri
 			&i.Payload,
 			&i.Redaction,
 			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMutationsSinceRevision = `-- name: ListMutationsSinceRevision :many
+SELECT id, capture_id, op, payload, client_t, created_at, workspace_id, seq FROM mutations
+WHERE workspace_id = $1 AND seq > $2
+ORDER BY seq ASC
+LIMIT $3
+`
+
+type ListMutationsSinceRevisionParams struct {
+	WorkspaceID string      `json:"workspace_id"`
+	Seq         pgtype.Int8 `json:"seq"`
+	Limit       int32       `json:"limit"`
+}
+
+// Task 6's delta log: every mutation applied in workspace_id with seq >
+// since, ordered by seq so a client resumes exactly where it left off
+// regardless of which capture each mutation touched. limit is passed as
+// requested-page-size+1 by the caller so it can detect has_more without a
+// second COUNT query.
+func (q *Queries) ListMutationsSinceRevision(ctx context.Context, arg ListMutationsSinceRevisionParams) ([]Mutation, error) {
+	rows, err := q.db.Query(ctx, listMutationsSinceRevision, arg.WorkspaceID, arg.Seq, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Mutation
+	for rows.Next() {
+		var i Mutation
+		if err := rows.Scan(
+			&i.ID,
+			&i.CaptureID,
+			&i.Op,
+			&i.Payload,
+			&i.ClientT,
+			&i.CreatedAt,
+			&i.WorkspaceID,
+			&i.Seq,
 		); err != nil {
 			return nil, err
 		}

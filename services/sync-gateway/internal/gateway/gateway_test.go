@@ -14,11 +14,14 @@ import (
 // database required, per the brief's "unit-testable without a database"
 // requirement.
 type fakeStore struct {
-	captures      map[string]Capture // captureID -> capture
-	mutationSeen  map[string]bool
-	fieldVersions map[string]FieldVersion // captureID+"/"+field -> version
-	comments      []insertedComment
-	superseded    []supersededRecord
+	captures          map[string]Capture // captureID -> capture
+	mutationSeen      map[string]bool
+	fieldVersions     map[string]FieldVersion // captureID+"/"+field -> version
+	comments          []insertedComment
+	superseded        []supersededRecord
+	deltaLog          []DeltaMutation // Task 6: PullMutationsSince reads this, in insertion order == seq order
+	deltaLogWorkspace []string        // parallel to deltaLog: workspace each row was stamped with
+	pullErr           error
 
 	// error injection for infra-failure test cases
 	lockErr       error
@@ -77,7 +80,7 @@ func (f *fakeStore) LockCaptureForWorkspace(_ context.Context, captureID, worksp
 	return c, true, nil
 }
 
-func (f *fakeStore) InsertMutationIfNew(_ context.Context, mutationID, _, _ string, _ []byte, _ int64) (bool, error) {
+func (f *fakeStore) InsertMutationIfNew(_ context.Context, mutationID, captureID, workspaceID, op string, payload []byte, clientT int64) (bool, error) {
 	if f.insertMutErr != nil {
 		return false, f.insertMutErr
 	}
@@ -85,7 +88,38 @@ func (f *fakeStore) InsertMutationIfNew(_ context.Context, mutationID, _, _ stri
 		return false, nil
 	}
 	f.mutationSeen[mutationID] = true
+	f.deltaLog = append(f.deltaLog, DeltaMutation{
+		Seq:       int64(len(f.deltaLog) + 1),
+		ID:        mutationID,
+		CaptureID: captureID,
+		Op:        op,
+		Payload:   payload,
+		ClientT:   clientT,
+	})
+	// workspaceID is stamped onto the delta-log row in pgStore; the fake
+	// only needs it if a test filters PullMutationsSince across multiple
+	// workspaces, which deltaLogWorkspace below tracks.
+	f.deltaLogWorkspace = append(f.deltaLogWorkspace, workspaceID)
 	return true, nil
+}
+
+// PullMutationsSince mirrors pgStore's WHERE workspace_id = $1 AND seq > $2
+// ORDER BY seq LIMIT $3 without a database.
+func (f *fakeStore) PullMutationsSince(_ context.Context, workspaceID string, since int64, limit int32) ([]DeltaMutation, error) {
+	if f.pullErr != nil {
+		return nil, f.pullErr
+	}
+	out := make([]DeltaMutation, 0)
+	for i, d := range f.deltaLog {
+		if f.deltaLogWorkspace[i] != workspaceID || d.Seq <= since {
+			continue
+		}
+		out = append(out, d)
+		if int32(len(out)) >= limit { //nolint:gosec // test fixture, len(out) bounded by test data size
+			break
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeStore) FieldVersion(_ context.Context, captureID, field string) (FieldVersion, bool, error) {

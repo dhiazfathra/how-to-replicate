@@ -120,14 +120,27 @@ VALUES ($1, $2, $3, $4, $5) RETURNING *;
 -- reasoning as CreateMutation above), it just makes a duplicate insert a
 -- no-op instead of a unique-violation error. sqlc's :one returns
 -- pgx.ErrNoRows when the conflict fires with nothing to return, which
--- callers read as "already applied, do not reprocess".
-INSERT INTO mutations (id, capture_id, op, payload, client_t)
-VALUES ($1, $2, $3, $4, $5)
+-- callers read as "already applied, do not reprocess". workspace_id is
+-- stamped here (Task 6) so PullDeltas can filter the delta log without a
+-- join back to captures.
+INSERT INTO mutations (id, capture_id, workspace_id, op, payload, client_t)
+VALUES ($1, $2, $3, $4, $5, $6)
 ON CONFLICT (id) DO NOTHING
 RETURNING *;
 
 -- name: GetMutation :one
 SELECT * FROM mutations WHERE id = $1;
+
+-- name: ListMutationsSinceRevision :many
+-- Task 6's delta log: every mutation applied in workspace_id with seq >
+-- since, ordered by seq so a client resumes exactly where it left off
+-- regardless of which capture each mutation touched. limit is passed as
+-- requested-page-size+1 by the caller so it can detect has_more without a
+-- second COUNT query.
+SELECT * FROM mutations
+WHERE workspace_id = $1 AND seq > $2
+ORDER BY seq ASC
+LIMIT $3;
 
 -- name: LockCaptureForWorkspace :one
 -- Workspace and existence are checked in one predicate so a mutation

@@ -23,6 +23,7 @@ import (
 	"github.com/dhiazfathra/how-to-replicate/services/sync-gateway/internal/authctx"
 	"github.com/dhiazfathra/how-to-replicate/services/sync-gateway/internal/gateway"
 	"github.com/dhiazfathra/how-to-replicate/services/sync-gateway/internal/handler"
+	"github.com/dhiazfathra/how-to-replicate/services/sync-gateway/internal/realtime"
 )
 
 const serviceName = "sync-gateway"
@@ -62,12 +63,23 @@ func run() error {
 		return err
 	}
 
-	gw := &gateway.Gateway{WithinTx: gateway.NewTxRunner(pool), Storage: objectStore}
+	hub := realtime.NewHub()
+	gw := &gateway.Gateway{
+		WithinTx: gateway.NewTxRunner(pool),
+		Storage:  objectStore,
+		OnCommit: hub.Notify,
+	}
 	svc := &handler.SyncService{Gateway: gw}
+	wsHandler := &realtime.Handler{
+		Gateway:    gw,
+		Hub:        hub,
+		Membership: realtime.NewMembershipStore(),
+	}
 
 	router := httpx.NewRouter(serviceName, slog.Default())
 	path, connectHandler := syncv1connect.NewSyncServiceHandler(svc)
 	router.Mount(path, authctx.HeaderMiddleware(connectHandler))
+	router.Handle("/v1/sync/deltas/ws", authctx.HeaderMiddleware(wsHandler))
 
 	addr := os.Getenv("HTR_LISTEN_ADDR")
 	if addr == "" {

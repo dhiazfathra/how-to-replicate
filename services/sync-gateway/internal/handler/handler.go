@@ -1,7 +1,9 @@
 // Package handler adapts sync-gateway's ConnectRPC surface to
-// internal/gateway. PushMutations is implemented here; PullDeltas,
-// RequestAssetUpload, and CompleteAssetUpload belong to Tasks 5 and 6 and
-// return Unimplemented until then.
+// internal/gateway: PushMutations, PullDeltas, RequestAssetUpload, and
+// CompleteAssetUpload. The WebSocket delta fan-out (also Task 6) is a
+// separate plain-HTTP surface in internal/realtime — ConnectRPC has no
+// bidirectional-streaming story this codebase uses, so it isn't a handler
+// method here.
 package handler
 
 import (
@@ -62,6 +64,41 @@ func (s *SyncService) PushMutations(
 		})
 	}
 	return connect.NewResponse(resp), nil
+}
+
+// PullDeltas requires capture:read — recovering via pull is the invariant
+// path Task 6's brief requires ("the socket is a latency optimization over
+// the pull, never the only path"), so it must never require more than the
+// WebSocket fan-out does. workspace_id in the request body, if set, must
+// agree with the caller's authenticated workspace — a client can never use
+// the field to read a workspace other than the one its own credential
+// scopes it to.
+func (s *SyncService) PullDeltas(
+	ctx context.Context,
+	req *connect.Request[syncv1.PullDeltasRequest],
+) (*connect.Response[syncv1.PullDeltasResponse], error) {
+	workspaceID, ok := authctx.WorkspaceID(ctx)
+	if !ok {
+		return nil, connect.NewError(connect.CodeUnauthenticated, errUnauthenticated)
+	}
+	role, _ := authctx.Role(ctx)
+	if !authz.Can(authz.Role(role), authz.PermissionCaptureRead) {
+		return nil, connect.NewError(connect.CodePermissionDenied, errPermissionDenied)
+	}
+	if reqWorkspace := req.Msg.GetWorkspaceId(); reqWorkspace != "" && reqWorkspace != workspaceID {
+		return nil, connect.NewError(connect.CodePermissionDenied, errPermissionDenied)
+	}
+
+	mutations, revision, hasMore, err := s.Gateway.PullDeltas(ctx, workspaceID, req.Msg.GetSince(), 0)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, err)
+	}
+
+	return connect.NewResponse(&syncv1.PullDeltasResponse{
+		Mutations: mutations,
+		Revision:  revision,
+		HasMore:   hasMore,
+	}), nil
 }
 
 // RequestAssetUpload requires capture:write, same as PushMutations — an

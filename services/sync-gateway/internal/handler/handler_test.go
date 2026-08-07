@@ -19,12 +19,14 @@ import (
 // stubStore is the minimal gateway.Store fake needed to drive the handler
 // end to end without a database.
 type stubStore struct {
-	captures         map[string]gateway.Capture
-	seen             map[string]bool
-	assets           map[string]gateway.Asset
-	presigns         map[string]gateway.AssetUploadPresign
-	consumedPresigns map[string]bool
-	manifestComplete map[string]bool
+	captures          map[string]gateway.Capture
+	seen              map[string]bool
+	assets            map[string]gateway.Asset
+	presigns          map[string]gateway.AssetUploadPresign
+	consumedPresigns  map[string]bool
+	manifestComplete  map[string]bool
+	deltaLog          []gateway.DeltaMutation
+	deltaLogWorkspace []string
 }
 
 func newStubStore() *stubStore {
@@ -154,12 +156,33 @@ func (s *stubStore) LockCaptureForWorkspace(_ context.Context, captureID, worksp
 	return c, true, nil
 }
 
-func (s *stubStore) InsertMutationIfNew(_ context.Context, mutationID, _, _ string, _ []byte, _ int64) (bool, error) {
+func (s *stubStore) InsertMutationIfNew(_ context.Context, mutationID, captureID, workspaceID, op string, payload []byte, clientT int64) (bool, error) {
 	if s.seen[mutationID] {
 		return false, nil
 	}
 	s.seen[mutationID] = true
+	s.deltaLog = append(s.deltaLog, gateway.DeltaMutation{
+		Seq: int64(len(s.deltaLog) + 1), ID: mutationID, CaptureID: captureID,
+		Op: op, Payload: payload, ClientT: clientT,
+	})
+	s.deltaLogWorkspace = append(s.deltaLogWorkspace, workspaceID)
 	return true, nil
+}
+
+// PullMutationsSince mirrors gateway_test.go's fakeStore implementation —
+// see that file for the reasoning.
+func (s *stubStore) PullMutationsSince(_ context.Context, workspaceID string, since int64, limit int32) ([]gateway.DeltaMutation, error) {
+	out := make([]gateway.DeltaMutation, 0)
+	for i, d := range s.deltaLog {
+		if s.deltaLogWorkspace[i] != workspaceID || d.Seq <= since {
+			continue
+		}
+		out = append(out, d)
+		if int32(len(out)) >= limit { //nolint:gosec // test fixture, len(out) bounded by test data size
+			break
+		}
+	}
+	return out, nil
 }
 
 func (s *stubStore) FieldVersion(context.Context, string, string) (gateway.FieldVersion, bool, error) {
@@ -305,15 +328,129 @@ func TestSyncService_PushMutations_GatewayErrorIsInternal(t *testing.T) {
 	}
 }
 
-// TestSyncService_UnimplementedRPCs proves the RPC owned by Task 6
-// (RequestAssetUpload/CompleteAssetUpload are implemented as of Task 5) is
-// explicitly unimplemented, not silently missing.
-func TestSyncService_UnimplementedRPCs(t *testing.T) {
-	svc := &SyncService{}
-	ctx := context.Background()
+// TestSyncService_PullDeltas_Success exercises the full happy path: push a
+// few mutations, then pull them back through the RPC surface and confirm
+// the wire response carries every one, in order, with the revision cursor
+// advanced.
+func TestSyncService_PullDeltas_Success(t *testing.T) {
+	store := newStubStore()
+	store.captures["cap_1"] = gateway.Capture{ID: "cap_1", WorkspaceID: "ws_1"}
+	svc := newTestService(store)
+	ctx := authctx.WithRole(authctx.WithWorkspaceID(context.Background(), "ws_1"), "member")
 
-	if _, err := svc.PullDeltas(ctx, connect.NewRequest(&syncv1.PullDeltasRequest{})); err == nil {
-		t.Fatalf("want PullDeltas unimplemented error")
+	if _, err := svc.PushMutations(ctx, connect.NewRequest(&syncv1.PushMutationsRequest{
+		Mutations: []*syncv1.Mutation{
+			{Id: "m1", CaptureId: "cap_1", Op: &syncv1.Mutation_SetTitle{SetTitle: &syncv1.SetTitle{Title: "x"}}},
+			{Id: "m2", CaptureId: "cap_1", Op: &syncv1.Mutation_SetTitle{SetTitle: &syncv1.SetTitle{Title: "y"}}},
+		},
+	})); err != nil {
+		t.Fatalf("PushMutations: %v", err)
+	}
+
+	resp, err := svc.PullDeltas(ctx, connect.NewRequest(&syncv1.PullDeltasRequest{Since: 0}))
+	if err != nil {
+		t.Fatalf("PullDeltas: %v", err)
+	}
+	if len(resp.Msg.Mutations) != 2 || resp.Msg.Mutations[0].GetId() != "m1" || resp.Msg.Mutations[1].GetId() != "m2" {
+		t.Fatalf("want [m1 m2], got %+v", resp.Msg.Mutations)
+	}
+	if resp.Msg.Revision != 2 || resp.Msg.HasMore {
+		t.Fatalf("want revision=2 hasMore=false, got revision=%d hasMore=%v", resp.Msg.Revision, resp.Msg.HasMore)
+	}
+
+	// since= the current head returns nothing new.
+	empty, err := svc.PullDeltas(ctx, connect.NewRequest(&syncv1.PullDeltasRequest{Since: resp.Msg.Revision}))
+	if err != nil {
+		t.Fatalf("PullDeltas at head: %v", err)
+	}
+	if len(empty.Msg.Mutations) != 0 {
+		t.Fatalf("want no deltas at head, got %+v", empty.Msg.Mutations)
+	}
+}
+
+// TestSyncService_PullDeltas_WorkspaceIdMustMatchAuthenticatedWorkspace
+// proves the request body's workspace_id can never be used to read a
+// workspace other than the one the caller's own credential scopes it to —
+// a client cannot use the field to escape workspace isolation.
+func TestSyncService_PullDeltas_WorkspaceIdMustMatchAuthenticatedWorkspace(t *testing.T) {
+	svc := newTestService(newStubStore())
+	ctx := authctx.WithRole(authctx.WithWorkspaceID(context.Background(), "ws_1"), "member")
+
+	_, err := svc.PullDeltas(ctx, connect.NewRequest(&syncv1.PullDeltasRequest{WorkspaceId: "ws_other"}))
+	if err == nil {
+		t.Fatalf("want error, got nil")
+	}
+	var connectErr *connect.Error
+	if !errors.As(err, &connectErr) || connectErr.Code() != connect.CodePermissionDenied {
+		t.Fatalf("want CodePermissionDenied, got %v", err)
+	}
+}
+
+// TestSyncService_PullDeltas_MatchingWorkspaceIdIsAllowed proves the
+// workspace_id field is fine to send as long as it agrees with the
+// authenticated workspace — the mismatch check must not reject the normal
+// case.
+func TestSyncService_PullDeltas_MatchingWorkspaceIdIsAllowed(t *testing.T) {
+	svc := newTestService(newStubStore())
+	ctx := authctx.WithRole(authctx.WithWorkspaceID(context.Background(), "ws_1"), "member")
+
+	resp, err := svc.PullDeltas(ctx, connect.NewRequest(&syncv1.PullDeltasRequest{WorkspaceId: "ws_1"}))
+	if err != nil {
+		t.Fatalf("PullDeltas: %v", err)
+	}
+	if len(resp.Msg.Mutations) != 0 {
+		t.Fatalf("want no mutations, got %+v", resp.Msg.Mutations)
+	}
+}
+
+func TestSyncService_PullDeltas_MissingWorkspaceIsUnauthenticated(t *testing.T) {
+	svc := newTestService(newStubStore())
+
+	_, err := svc.PullDeltas(context.Background(), connect.NewRequest(&syncv1.PullDeltasRequest{}))
+	if err == nil {
+		t.Fatalf("want error, got nil")
+	}
+	var connectErr *connect.Error
+	if !errors.As(err, &connectErr) || connectErr.Code() != connect.CodeUnauthenticated {
+		t.Fatalf("want CodeUnauthenticated, got %v", err)
+	}
+}
+
+func TestSyncService_PullDeltas_ViewerRoleIsAllowed(t *testing.T) {
+	svc := newTestService(newStubStore())
+	ctx := authctx.WithRole(authctx.WithWorkspaceID(context.Background(), "ws_1"), "viewer")
+
+	if _, err := svc.PullDeltas(ctx, connect.NewRequest(&syncv1.PullDeltasRequest{})); err != nil {
+		t.Fatalf("PullDeltas: viewer should have capture:read, got %v", err)
+	}
+}
+
+func TestSyncService_PullDeltas_MissingRoleIsPermissionDenied(t *testing.T) {
+	svc := newTestService(newStubStore())
+	ctx := authctx.WithWorkspaceID(context.Background(), "ws_1")
+
+	_, err := svc.PullDeltas(ctx, connect.NewRequest(&syncv1.PullDeltasRequest{}))
+	if err == nil {
+		t.Fatalf("want error, got nil")
+	}
+	var connectErr *connect.Error
+	if !errors.As(err, &connectErr) || connectErr.Code() != connect.CodePermissionDenied {
+		t.Fatalf("want CodePermissionDenied, got %v", err)
+	}
+}
+
+func TestSyncService_PullDeltas_GatewayErrorIsInternal(t *testing.T) {
+	boom := errors.New("boom")
+	gw := &gateway.Gateway{
+		WithinTx: func(context.Context, func(context.Context, gateway.Store) error) error { return boom },
+	}
+	svc := &SyncService{Gateway: gw}
+	ctx := authctx.WithRole(authctx.WithWorkspaceID(context.Background(), "ws_1"), "member")
+
+	_, err := svc.PullDeltas(ctx, connect.NewRequest(&syncv1.PullDeltasRequest{}))
+	var connectErr *connect.Error
+	if !errors.As(err, &connectErr) || connectErr.Code() != connect.CodeInternal {
+		t.Fatalf("want CodeInternal, got %v", err)
 	}
 }
 

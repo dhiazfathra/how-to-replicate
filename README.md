@@ -87,7 +87,7 @@ cli/                  agent-facing CLI (Phase 2 — not built)
 proto/                Buf module — API schema, generated Go checked in under proto/gen
 services/             Go workspace (Phase 1+)
   internal/           shared packages: db, migrate, otel, httpx, storage, authz, testsupport
-  sync-gateway/       mutation intake, revisions, last-write-wins (Task 4)
+  sync-gateway/       mutation intake, revisions, LWW, delta pull, WS fan-out (Tasks 4/6)
 docs/
   decisions/          ADRs
   superpowers/specs/  design specs
@@ -197,9 +197,9 @@ type-safe Go under `services/internal/db/sqlcgen`. Migrations are plain SQL run 
 `services/sync-gateway/` is the first service to actually wire the schema and protos
 from Task 3 into a running RPC surface. It implements `SyncService.PushMutations`:
 batched, idempotent mutation intake with server-owned revision numbering and
-per-field last-write-wins conflict resolution (spec §10, ADR-012), and
-`RequestAssetUpload`/`CompleteAssetUpload` (Task 5, below). `PullDeltas` returns
-`Unimplemented` — it belongs to Task 6.
+per-field last-write-wins conflict resolution (spec §10, ADR-012),
+`RequestAssetUpload`/`CompleteAssetUpload` (Task 5, below), and
+`PullDeltas`/the WebSocket delta fan-out (Task 6, below).
 
 - **Idempotency** is a plain `INSERT ... ON CONFLICT (id) DO NOTHING` on the
   mutation's client-minted ULID primary key (`InsertMutationIfNew` in
@@ -314,6 +314,68 @@ headers → complete → verify); size and hash mismatches each leaving
 replayed `CompleteAssetUpload` call; an expired presign; a re-request never reusing a
 key even after verification; and the bucket denying an anonymous read. Running them
 needs Docker (testcontainers) — they skip cleanly if no daemon is reachable.
+
+### Delta pull and WebSocket fan-out (Task 6)
+
+`PullDeltas` and the WebSocket endpoint are two ways to read the same thing:
+sync-gateway's delta log. Every mutation `PushMutations` accepts is a row in
+Postgres' `mutations` table, and Task 6 adds two columns to that table rather
+than a new change-log table — `workspace_id` and a global `BIGSERIAL seq`
+(migration `00005_mutations_delta_log.sql`). `seq` is the revision cursor:
+unlike `captures.revision` (per-capture, from Task 4), it's monotonic across
+every capture in a workspace, which is what a single `since=<revision>`
+cursor over a whole workspace needs.
+
+- **`PullDeltas(since)` is the authoritative recovery path.** It returns
+  every mutation with `seq > since` in the caller's workspace, ordered by
+  `seq`, decoded back into a full `Mutation` (`internal/gateway/deltas.go`'s
+  `decodePayload`, the exact reverse of `PushMutations`' `decodeOp`/`opName`).
+  The RPC is unary, not a gRPC stream — pagination is via `has_more` and the
+  returned `revision`: keep calling with `since=<last response's revision>`
+  until `has_more` is false. `internal/gateway.Gateway.PullDeltas` is the one
+  method both the RPC handler and the WebSocket loop call — there's no
+  parallel decode path to keep in sync.
+- **The WebSocket endpoint (`/v1/sync/deltas/ws`) is a latency optimization
+  over that same pull, never a separate path.** `internal/realtime.Handler`'s
+  loop is: re-authorize, call `Gateway.PullDeltas` for whatever's new since
+  the last batch it sent, write it, wait for a wake-up, repeat. A client that
+  disconnects and reconnects (or never connects at all) recovers everything
+  it missed by calling `PullDeltas(since=0)` or `since=<last known
+  revision>` — proven by `TestSocket_ReconnectAfterGapConvergesViaPull`.
+- **Fan-out is in-process pub/sub, not LISTEN/NOTIFY or a message bus.**
+  `internal/realtime.Hub` keyed by workspace ID; `Gateway.OnCommit` (wired to
+  `hub.Notify` in `cmd/sync-gateway/main.go`) fires once per newly-applied
+  mutation, never on an idempotent replay. This is single-instance only — if
+  sync-gateway is ever horizontally scaled, cross-replica fan-out (e.g.
+  Postgres `LISTEN`/`NOTIFY`) is a future task, not something Task 6 needed.
+- **A slow consumer is disconnected, never buffered.** Each delta-batch write
+  runs under a deadline (`Handler.WriteTimeout`, default 5s); a write that
+  doesn't finish in time closes the socket (`StatusPolicyViolation`) instead
+  of queuing behind it. The Hub's own wake-up channel is capacity-1 and
+  coalescing, so an unread subscriber never grows memory either.
+- **Authorization is re-checked before every batch, not just at handshake.**
+  `internal/realtime.MembershipStore` is a small, real, mutable revalidation
+  source — role plus optional expiry, keyed by `(workspace, user)`, with a
+  workspace-wide revocation flag — that the socket loop queries before every
+  `PullDeltas` call. It's seeded from the same `internal/authctx` header seam
+  Tasks 4/5 use (a stand-in for Task 10's real membership/identity), but the
+  store and the per-batch check themselves are real: four tests each mutate
+  it mid-connection — membership removal, role downgrade, token expiry,
+  workspace revocation — and each closes an already-open socket before its
+  next delta would have arrived.
+
+```bash
+cd services/sync-gateway
+go test ./internal/gateway/... -run PullDeltas   # decode/pagination/isolation, no DB needed
+go test ./internal/realtime/...                  # Hub, MembershipStore, and the socket loop end to end
+```
+
+To try the WebSocket by hand against a running server (see the `go run
+./cmd/sync-gateway` invocation above): connect with any `coder/websocket`- or
+RFC 6455-compatible client to `ws://localhost:8081/v1/sync/deltas/ws`,
+sending the same `X-Htr-Workspace-Id`/`X-Htr-User-Id`/`X-Htr-Role` headers
+PushMutations uses. Each message is JSON: `{"mutations": [...protojson
+Mutation...], "revision": <int64>}`.
 
 ## Running the extension
 
