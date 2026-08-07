@@ -1,0 +1,107 @@
+-- name: CreateWorkspace :one
+INSERT INTO workspaces (id, name) VALUES ($1, $2) RETURNING *;
+
+-- name: GetWorkspace :one
+SELECT * FROM workspaces WHERE id = $1;
+
+-- name: CreateProject :one
+INSERT INTO projects (id, workspace_id, name) VALUES ($1, $2, $3) RETURNING *;
+
+-- name: GetProject :one
+SELECT * FROM projects WHERE id = $1;
+
+-- name: CreateUser :one
+INSERT INTO users (id, email, name) VALUES ($1, $2, $3) RETURNING *;
+
+-- name: GetUser :one
+SELECT * FROM users WHERE id = $1;
+
+-- name: CreateMembership :one
+INSERT INTO memberships (id, workspace_id, user_id, role) VALUES ($1, $2, $3, $4) RETURNING *;
+
+-- name: GetMembership :one
+SELECT * FROM memberships WHERE id = $1;
+
+-- name: CreateRedactionRuleset :one
+INSERT INTO redaction_rulesets (version, workspace_id, rules) VALUES ($1, $2, $3) RETURNING *;
+
+-- name: GetRedactionRuleset :one
+SELECT * FROM redaction_rulesets WHERE version = $1;
+
+-- name: CreateCapture :one
+INSERT INTO captures (
+    id, workspace_id, project_id, source, state, fidelity, epoch, env,
+    metadata, doc, withheld_event_count, revision, manifest_complete,
+    applied_ruleset_version
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+) RETURNING *;
+
+-- name: GetCapture :one
+SELECT * FROM captures WHERE id = $1;
+
+-- name: CreateCaptureEvent :one
+INSERT INTO capture_events (id, capture_id, t, kind, payload, redaction)
+VALUES ($1, $2, $3, $4, $5, $6) RETURNING *;
+
+-- name: GetCaptureEvent :one
+SELECT * FROM capture_events WHERE id = $1;
+
+-- name: ListCaptureEventsByCapture :many
+SELECT * FROM capture_events WHERE capture_id = $1 ORDER BY t ASC;
+
+-- name: CreateAsset :one
+INSERT INTO assets (id, capture_id, kind, mime_type, size_bytes, chunk_count, sha256, object_key)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *;
+
+-- name: GetAsset :one
+SELECT * FROM assets WHERE id = $1;
+
+-- name: CreateMutation :one
+-- Plain insert on the client-minted mutation ULID primary key. Replay is
+-- idempotent because a duplicate ID hits the PK constraint; callers treat
+-- that unique-violation as "already applied" rather than an error. An
+-- ON CONFLICT DO UPDATE is deliberately not used here: mutations is
+-- append-only (no UPDATE grant for the runtime role), so upserting would
+-- defeat the same immutability this table exists to enforce.
+INSERT INTO mutations (id, capture_id, op, payload, client_t)
+VALUES ($1, $2, $3, $4, $5) RETURNING *;
+
+-- name: GetMutation :one
+SELECT * FROM mutations WHERE id = $1;
+
+-- name: CreateComment :one
+INSERT INTO comments (id, capture_id, author_id, body) VALUES ($1, $2, $3, $4) RETURNING *;
+
+-- name: GetComment :one
+SELECT * FROM comments WHERE id = $1;
+
+-- name: CreateAuditLog :one
+INSERT INTO audit_log (id, workspace_id, actor_id, action, subject, details)
+VALUES ($1, $2, $3, $4, $5, $6) RETURNING *;
+
+-- name: GetAuditLog :one
+SELECT * FROM audit_log WHERE id = $1;
+
+-- name: CreateShareLink :one
+INSERT INTO share_links (id, capture_id, token, created_by, expires_at)
+VALUES ($1, $2, $3, $4, $5) RETURNING *;
+
+-- name: GetShareLink :one
+SELECT * FROM share_links WHERE id = $1;
+
+-- name: RevokeShareLink :one
+UPDATE share_links SET revoked_at = now() WHERE id = $1 RETURNING *;
+
+-- name: CreateIntegrationBinding :one
+INSERT INTO integration_bindings (id, workspace_id, provider, config)
+VALUES ($1, $2, $3, $4) RETURNING *;
+
+-- name: GetIntegrationBinding :one
+SELECT * FROM integration_bindings WHERE id = $1;
+
+-- name: CreateOutboxEntry :one
+INSERT INTO outbox (id, topic, payload) VALUES ($1, $2, $3) RETURNING *;
+
+-- name: GetOutboxEntry :one
+SELECT * FROM outbox WHERE id = $1;

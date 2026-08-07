@@ -133,8 +133,34 @@ pnpm exec playwright install --with-deps chromium
 
 Requires **Go 1.25+**, the [buf CLI](https://buf.build/docs/installation), and Docker
 (for `testcontainers-go`-backed integration tests). `go.work` at the repo root covers
-`services/*`; `services/internal` is the shared package every service builds inside —
-no service has landed yet.
+`services/*` and `proto` (the generated proto Go module); `services/internal` is the
+shared package every service builds inside — no service has landed yet.
+
+### Schema and wire contract (Task 3)
+
+The Postgres schema lives in `services/internal/migrate/migrations/00002_schema.sql`:
+`workspaces`/`projects`/`users`/`memberships`, `captures` (carrying
+`applied_ruleset_version` — the ruleset the *client* redacted with, distinct from
+whatever `redaction-audit` evaluates against later), append-only `capture_events`
+(`t` is a ms offset from `capture.epoch`, never wall-clock), `assets`, `mutations`
+(PK on the client-minted mutation ULID, so replay is idempotent), `comments`,
+versioned `redaction_rulesets`, append-only `audit_log`, `share_links`,
+`integration_bindings`, and `outbox` (table only — Phase 2 wires the logic).
+
+Two Postgres roles enforce immutability, not just convention: the **migration role**
+(whoever runs `goose`, i.e. owns the schema) and **`htr_runtime`**, the role every
+service connects as, holding `SELECT`+`INSERT` on the append-only tables and full
+CRUD only on tables genuinely mutated in place. `services/internal/db.WithRuntimeRole`
+rewrites an admin DSN into the runtime role's DSN. A `BEFORE UPDATE OR DELETE` trigger
+on every append-only table is defence in depth on top of the grant — it rejects the
+same statements even for the schema owner, who bypasses grants.
+
+The wire contract is `proto/sync/v1/sync.proto` (the closed `Mutation` oneof —
+`SetTitle`/`SetSummary`/`SetTags`/`Assign`/`AppendComment` — plus `SyncService`) and
+`proto/capture/v1/capture.proto` (`CaptureService`, the read surface). Both compile to
+type-safe Go via `sqlc` (`services/sqlc.yaml` → `services/internal/db/sqlcgen`) and
+buf/connect-go (`proto/buf.gen.yaml` → `proto/gen/go`). This task delivers schema,
+protos, and generated code only — no service wires them up yet (Tasks 4+).
 
 ```bash
 go work sync                       # sync go.work with each module's go.mod

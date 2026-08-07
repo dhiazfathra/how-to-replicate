@@ -15,6 +15,12 @@ import (
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
+// RuntimeRolePassword is the password the schema migration assigns the
+// htr_runtime role (services/internal/migrate/migrations/00002_schema.sql).
+// It is fixed and non-secret: it only ever protects a throwaway test
+// container, never a real deployment (which sets its own).
+const RuntimeRolePassword = "htr_runtime"
+
 // dockerAvailable does a best-effort, short-timeout check for a reachable
 // Docker daemon so integration tests can skip cleanly in environments
 // without one instead of hanging or failing.

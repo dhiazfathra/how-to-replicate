@@ -5,10 +5,30 @@ package db
 import (
 	"context"
 	"fmt"
+	"net/url"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// RuntimeRole is the Postgres role every service connects as. It holds
+// SELECT/INSERT on every table and UPDATE/DELETE only on tables that are
+// genuinely mutated in place — never on the append-only tables. The
+// migration role (whatever superuser/owner ran goose) is never used for
+// service traffic; see services/internal/migrate/migrations/00002_schema.sql.
+const RuntimeRole = "htr_runtime"
+
+// WithRuntimeRole rewrites dsn's credentials to connect as RuntimeRole,
+// so every service talks to Postgres as the least-privileged role instead
+// of the schema owner. password is the runtime role's password.
+func WithRuntimeRole(dsn, password string) (string, error) {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return "", fmt.Errorf("db: parse dsn: %w", err)
+	}
+	u.User = url.UserPassword(RuntimeRole, password)
+	return u.String(), nil
+}
 
 // Pool is the subset of *pgxpool.Pool used by services. Defined as an
 // interface so callers can fake it in tests without a real database.

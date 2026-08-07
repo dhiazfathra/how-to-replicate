@@ -1,0 +1,113 @@
+syntax = "proto3";
+
+package capture.v1;
+
+message Capture {
+  string id = 1;
+  string workspace_id = 2;
+  string project_id = 3;
+  string source = 4;
+  string state = 5;
+  string fidelity = 6;
+  int64 created_at_ms = 7;
+  int64 epoch_ms = 8;
+  string env_json = 9;
+  string metadata_json = 10;
+  string doc_json = 11;
+  int32 withheld_event_count = 12;
+  int64 revision = 13;
+  bool manifest_complete = 14;
+  optional int32 applied_ruleset_version = 15;
+}
+
+message CaptureEvent {
+  string id = 1;
+  string capture_id = 2;
+  int64 t = 3; // ms offset from capture.epoch, not wall-clock
+  string kind = 4;
+  string payload_json = 5;
+  string redaction_json = 6;
+}
+
+message Comment {
+  string id = 1;
+  string capture_id = 2;
+  string author_id = 3;
+  string body = 4;
+  int64 created_at_ms = 5;
+}
+
+message ShareLink {
+  string id = 1;
+  string capture_id = 2;
+  string token = 3;
+  string created_by = 4;
+  int64 expires_at_ms = 5;
+  bool revoked = 6;
+}
+
+message GetCaptureRequest {
+  string capture_id = 1;
+}
+
+message GetCaptureResponse {
+  Capture capture = 1;
+}
+
+message ListCapturesRequest {
+  string workspace_id = 1;
+  string project_id = 2;
+}
+
+message ListCapturesResponse {
+  repeated Capture captures = 1;
+}
+
+message ListEventsRequest {
+  string capture_id = 1;
+}
+
+message ListEventsResponse {
+  repeated CaptureEvent events = 1;
+}
+
+message CreateCommentRequest {
+  string id = 1; // client-minted ULID
+  string capture_id = 2;
+  string author_id = 3;
+  string body = 4;
+}
+
+message CreateCommentResponse {
+  Comment comment = 1;
+}
+
+message CreateShareLinkRequest {
+  string id = 1; // client-minted ULID
+  string capture_id = 2;
+  string created_by = 3;
+  int64 expires_at_ms = 4;
+}
+
+message CreateShareLinkResponse {
+  ShareLink share_link = 1;
+}
+
+message RevokeShareLinkRequest {
+  string id = 1;
+}
+
+message RevokeShareLinkResponse {
+  bool revoked = 1;
+}
+
+// CaptureService is the read surface plus the two capture-scoped writes
+// (comments, share links) that aren't part of the closed mutation vocabulary.
+service CaptureService {
+  rpc GetCapture(GetCaptureRequest) returns (GetCaptureResponse);
+  rpc ListCaptures(ListCapturesRequest) returns (ListCapturesResponse);
+  rpc ListEvents(ListEventsRequest) returns (ListEventsResponse);
+  rpc CreateComment(CreateCommentRequest) returns (CreateCommentResponse);
+  rpc CreateShareLink(CreateShareLinkRequest) returns (CreateShareLinkResponse);
+  rpc RevokeShareLink(RevokeShareLinkRequest) returns (RevokeShareLinkResponse);
+}

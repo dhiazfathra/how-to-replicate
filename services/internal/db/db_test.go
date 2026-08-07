@@ -44,6 +44,23 @@ func (f *fakePool) Begin(context.Context) (pgx.Tx, error) {
 
 func (f *fakePool) Close() { f.closed = true }
 
+func TestWithRuntimeRole(t *testing.T) {
+	got, err := WithRuntimeRole("postgres://admin:adminpw@localhost:5432/htr?sslmode=disable", "runtimepw")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "postgres://" + RuntimeRole + ":runtimepw@localhost:5432/htr?sslmode=disable" //nolint:gosec // test fixture, not a real credential
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestWithRuntimeRole_InvalidDSN(t *testing.T) {
+	if _, err := WithRuntimeRole("://not-a-dsn", "pw"); err == nil {
+		t.Fatal("expected error for invalid dsn")
+	}
+}
+
 func TestNewPool_InvalidDSN(t *testing.T) {
 	if _, err := NewPool(context.Background(), "://not-a-dsn"); err == nil {
 		t.Fatal("expected error for invalid dsn")

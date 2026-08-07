@@ -35,6 +35,22 @@ func Up(db *sql.DB) error {
 	return nil
 }
 
+// Down rolls back the most recently applied migration on db.
+func Down(db *sql.DB) error {
+	goose.SetBaseFS(migrations)
+	defer goose.SetBaseFS(nil)
+
+	if err := setDialect("postgres"); err != nil {
+		return fmt.Errorf("migrate: set dialect: %w", err)
+	}
+
+	if err := goose.Down(db, "migrations"); err != nil {
+		return fmt.Errorf("migrate: down: %w", err)
+	}
+
+	return nil
+}
+
 // Status reports the current migration version applied to db.
 func Status(db *sql.DB) (int64, error) {
 	goose.SetBaseFS(migrations)

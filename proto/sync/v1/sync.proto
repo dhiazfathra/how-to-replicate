@@ -1,0 +1,101 @@
+syntax = "proto3";
+
+package sync.v1;
+
+// SetTitle sets a capture's title.
+message SetTitle {
+  string title = 1;
+}
+
+// SetSummary sets a capture's summary.
+message SetSummary {
+  string summary = 1;
+}
+
+// SetTags replaces a capture's tag set wholesale.
+message SetTags {
+  repeated string tags = 1;
+}
+
+// Assign sets a capture's assignee.
+message Assign {
+  string assignee_user_id = 1;
+}
+
+// AppendComment appends a comment to a capture.
+message AppendComment {
+  string comment_id = 1; // client-minted ULID
+  string body = 2;
+}
+
+// Mutation is the closed field/operation set clients may apply to a
+// capture. Only set/assign/append operations exist; a new mutable field
+// means a new message here, deliberately, with a migration.
+message Mutation {
+  string id = 1; // client-minted ULID
+  string capture_id = 2;
+  oneof op {
+    SetTitle set_title = 10;
+    SetSummary set_summary = 11;
+    SetTags set_tags = 12;
+    Assign assign = 13;
+    AppendComment append_comment = 14;
+  }
+  int64 client_t = 20; // ms offset, client clock — advisory only
+}
+
+message PushMutationsRequest {
+  repeated Mutation mutations = 1;
+}
+
+message PushMutationsResult {
+  string mutation_id = 1;
+  bool applied = 2;
+  string error = 3;
+}
+
+message PushMutationsResponse {
+  repeated PushMutationsResult results = 1;
+}
+
+message PullDeltasRequest {
+  string workspace_id = 1;
+  int64 since = 2; // revision cursor
+}
+
+message PullDeltasResponse {
+  repeated Mutation mutations = 1;
+  int64 revision = 2;
+  bool has_more = 3;
+}
+
+message RequestAssetUploadRequest {
+  string capture_id = 1;
+  string asset_id = 2; // client-minted ULID
+  string mime_type = 3;
+  int64 size_bytes = 4;
+}
+
+message RequestAssetUploadResponse {
+  string upload_url = 1;
+  string object_key = 2;
+}
+
+message CompleteAssetUploadRequest {
+  string capture_id = 1;
+  string asset_id = 2;
+  string sha256 = 3;
+}
+
+message CompleteAssetUploadResponse {
+  bool verified = 1;
+}
+
+// SyncService is the client-facing sync surface: push local mutations,
+// pull remote deltas, and negotiate asset uploads.
+service SyncService {
+  rpc PushMutations(PushMutationsRequest) returns (PushMutationsResponse);
+  rpc PullDeltas(PullDeltasRequest) returns (PullDeltasResponse);
+  rpc RequestAssetUpload(RequestAssetUploadRequest) returns (RequestAssetUploadResponse);
+  rpc CompleteAssetUpload(CompleteAssetUploadRequest) returns (CompleteAssetUploadResponse);
+}

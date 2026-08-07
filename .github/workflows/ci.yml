@@ -94,11 +94,17 @@ jobs:
         with:
           go-version-file: services/internal/go.mod
 
-      - name: golangci-lint
+      - name: golangci-lint (services/internal)
         uses: golangci/golangci-lint-action@v6
         with:
           version: latest
           working-directory: services/internal
+
+      - name: golangci-lint (proto)
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          working-directory: proto
 
   go-test:
     runs-on: ubuntu-latest
