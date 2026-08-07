@@ -384,6 +384,66 @@ func TestKillAndResume_FromEveryState_ReachesPurged(t *testing.T) {
 	}
 }
 
+// TestKillAndResume_BlobsDeleting_PartialDeleteBeforeCrash simulates a
+// genuine mid-loop crash, not just a crash between whole Advance calls:
+// the job row is still in blobs-deleting with ALL of its original object
+// keys recorded, but some of those keys are already gone from the bucket
+// (as they would be after Advance's per-key delete loop killed the process
+// partway through, before it could persist blobs-deleted). Resuming must
+// finish deleting the remaining keys, tolerate re-deleting the ones already
+// gone, and land on purged with no orphans.
+func TestKillAndResume_BlobsDeleting_PartialDeleteBeforeCrash(t *testing.T) {
+	f := newFakeStore()
+	seedReadyCapture(f, "cap_1", "ws_1", time.Now(), "obj/cap_1/a", "obj/cap_1/b", "obj/cap_1/c")
+
+	allKeys := append([]string{}, f.assets["cap_1"]...)
+	keysJSON, _ := json.Marshal(allKeys)
+
+	// The job row still lists every key, as it would after the
+	// tombstoned->blobs-deleting transition wrote them all at once.
+	job := sqlcgen.PurgeJob{ID: "job_1", CaptureID: "cap_1", WorkspaceID: "ws_1", State: StateBlobsDeleting, ObjectKeys: keysJSON}
+	f.jobs[job.ID] = job
+
+	// The "crash": some, but not all, keys were already deleted from the
+	// bucket directly (simulating Advance's per-key loop having deleted
+	// obj/cap_1/a and obj/cap_1/b before the process died, leaving
+	// obj/cap_1/c and the job row's state field untouched).
+	delete(f.bucket, "obj/cap_1/a")
+	delete(f.bucket, "obj/cap_1/b")
+	if len(f.bucket) != 1 {
+		t.Fatalf("expected exactly 1 key left in bucket before resume, got %v", f.bucket)
+	}
+
+	p := newPipeline(f)
+
+	resumed, err := p.Store.GetPurgeJob(context.Background(), job.ID)
+	if err != nil {
+		t.Fatalf("GetPurgeJob (simulating resume): %v", err)
+	}
+	if resumed.State != StateBlobsDeleting {
+		t.Fatalf("resumed job state = %q, want %q", resumed.State, StateBlobsDeleting)
+	}
+
+	final, err := p.RunToCompletion(context.Background(), resumed)
+	if err != nil {
+		t.Fatalf("RunToCompletion resumed mid-loop: %v", err)
+	}
+	if final.State != StatePurged {
+		t.Fatalf("final state = %q, want purged", final.State)
+	}
+	if len(f.bucket) != 0 {
+		t.Fatalf("blobs survived: %v", f.bucket)
+	}
+
+	orphans, err := p.DetectOrphans(context.Background(), "")
+	if err != nil {
+		t.Fatalf("DetectOrphans: %v", err)
+	}
+	if len(orphans) != 0 {
+		t.Fatalf("orphans = %v, want none", orphans)
+	}
+}
+
 func TestAdvance_OnPurgedJob_IsNoOp(t *testing.T) {
 	f := newFakeStore()
 	job := sqlcgen.PurgeJob{ID: "job_1", CaptureID: "cap_1", WorkspaceID: "ws_1", State: StatePurged}

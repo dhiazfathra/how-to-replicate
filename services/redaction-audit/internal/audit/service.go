@@ -168,27 +168,30 @@ func (s *Service) recordFinding(ctx context.Context, finding Finding) error {
 		appliedVersion = pgtype.Int4{Int32: *finding.AppliedRulesetVersion, Valid: true}
 	}
 
-	if _, err := s.store.CreateRedactionAuditFinding(ctx, sqlcgen.CreateRedactionAuditFindingParams{
-		ID:                       newID(),
-		CaptureID:                finding.CaptureID,
-		WorkspaceID:              finding.WorkspaceID,
-		AppliedRulesetVersion:    appliedVersion,
-		EvaluationRulesetVersion: finding.EvaluationRulesetVersion,
-		RuleIds:                  ruleIDsJSON,
-		EventIds:                 eventIDsJSON,
-	}); err != nil {
-		return fmt.Errorf("audit: write finding for capture %s: %w", finding.CaptureID, err)
-	}
-
 	details, _ := json.Marshal(finding)
-	if _, err := s.store.CreateAuditLog(ctx, sqlcgen.CreateAuditLogParams{
-		ID:          newID(),
-		WorkspaceID: finding.WorkspaceID,
-		Action:      "redaction_audit.finding",
-		Subject:     finding.CaptureID,
-		Details:     details,
-	}); err != nil {
-		return fmt.Errorf("audit: write audit_log for capture %s: %w", finding.CaptureID, err)
+
+	// Both writes go through a single Store call so the implementation can
+	// (and does, in PoolStore) commit them in one transaction — a finding
+	// row must never exist without its audit_log row, or vice versa.
+	if _, err := s.store.CreateFindingAndAuditLog(ctx,
+		sqlcgen.CreateRedactionAuditFindingParams{
+			ID:                       newID(),
+			CaptureID:                finding.CaptureID,
+			WorkspaceID:              finding.WorkspaceID,
+			AppliedRulesetVersion:    appliedVersion,
+			EvaluationRulesetVersion: finding.EvaluationRulesetVersion,
+			RuleIds:                  ruleIDsJSON,
+			EventIds:                 eventIDsJSON,
+		},
+		sqlcgen.CreateAuditLogParams{
+			ID:          newID(),
+			WorkspaceID: finding.WorkspaceID,
+			Action:      "redaction_audit.finding",
+			Subject:     finding.CaptureID,
+			Details:     details,
+		},
+	); err != nil {
+		return fmt.Errorf("audit: write finding+audit_log for capture %s: %w", finding.CaptureID, err)
 	}
 
 	return nil

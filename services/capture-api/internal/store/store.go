@@ -300,6 +300,10 @@ func (s *Store) CreateAuditLog(ctx context.Context, id, workspaceID, actorID, ac
 // unaudited. There is no non-transactional CreateCapture wrapper in this
 // package on purpose: every write path that creates a capture must go
 // through this one, atomic, audited primitive.
+//
+// TODO(future task): capture creation is still client-minted-and-synced,
+// not yet a call this package's own handlers make — wire this up when
+// server-side capture creation lands. Deferred, not forgotten.
 func CreateCaptureAndAudit(ctx context.Context, pool db.Pool, actorID string, arg sqlcgen.CreateCaptureParams) (sqlcgen.Capture, error) {
 	var c sqlcgen.Capture
 	err := db.WithTx(ctx, pool, func(ctx context.Context, tx pgx.Tx) error {

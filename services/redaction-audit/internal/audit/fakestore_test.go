@@ -82,36 +82,41 @@ func (f *fakeStore) GetLatestRedactionRuleset(ctx context.Context, workspaceID s
 	return f.rulesets[version], nil
 }
 
-func (f *fakeStore) CreateRedactionAuditFinding(ctx context.Context, arg sqlcgen.CreateRedactionAuditFindingParams) (sqlcgen.RedactionAuditFinding, error) {
+// CreateFindingAndAuditLog mimics PoolStore's transactional guarantee in
+// memory: if either write would fail, NEITHER row is appended — proving
+// service.go's caller-side contract ("both commit, or neither does") holds
+// regardless of which write fails.
+func (f *fakeStore) CreateFindingAndAuditLog(
+	ctx context.Context,
+	finding sqlcgen.CreateRedactionAuditFindingParams,
+	log sqlcgen.CreateAuditLogParams,
+) (sqlcgen.RedactionAuditFinding, error) {
 	if f.errCreateFinding != nil {
 		return sqlcgen.RedactionAuditFinding{}, f.errCreateFinding
 	}
+	if f.errCreateAudit != nil {
+		return sqlcgen.RedactionAuditFinding{}, f.errCreateAudit
+	}
+
 	row := sqlcgen.RedactionAuditFinding{
-		ID:                       arg.ID,
-		CaptureID:                arg.CaptureID,
-		WorkspaceID:              arg.WorkspaceID,
-		AppliedRulesetVersion:    arg.AppliedRulesetVersion,
-		EvaluationRulesetVersion: arg.EvaluationRulesetVersion,
-		RuleIds:                  arg.RuleIds,
-		EventIds:                 arg.EventIds,
+		ID:                       finding.ID,
+		CaptureID:                finding.CaptureID,
+		WorkspaceID:              finding.WorkspaceID,
+		AppliedRulesetVersion:    finding.AppliedRulesetVersion,
+		EvaluationRulesetVersion: finding.EvaluationRulesetVersion,
+		RuleIds:                  finding.RuleIds,
+		EventIds:                 finding.EventIds,
+	}
+	auditRow := sqlcgen.AuditLog{
+		ID:          log.ID,
+		WorkspaceID: log.WorkspaceID,
+		ActorID:     log.ActorID,
+		Action:      log.Action,
+		Subject:     log.Subject,
+		Details:     log.Details,
 	}
 	f.findings = append(f.findings, row)
-	return row, nil
-}
-
-func (f *fakeStore) CreateAuditLog(ctx context.Context, arg sqlcgen.CreateAuditLogParams) (sqlcgen.AuditLog, error) {
-	if f.errCreateAudit != nil {
-		return sqlcgen.AuditLog{}, f.errCreateAudit
-	}
-	row := sqlcgen.AuditLog{
-		ID:          arg.ID,
-		WorkspaceID: arg.WorkspaceID,
-		ActorID:     arg.ActorID,
-		Action:      arg.Action,
-		Subject:     arg.Subject,
-		Details:     arg.Details,
-	}
-	f.auditLogs = append(f.auditLogs, row)
+	f.auditLogs = append(f.auditLogs, auditRow)
 	return row, nil
 }
 

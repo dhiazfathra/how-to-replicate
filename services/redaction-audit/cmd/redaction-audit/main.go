@@ -49,7 +49,7 @@ func run() error {
 		return err
 	}
 
-	svc := audit.New(sqlcgen.New(pool), sink)
+	svc := audit.New(audit.NewPoolStore(pool), sink)
 	interval := pollInterval()
 
 	slog.Info("redaction-audit: starting poll loop", "interval", interval)

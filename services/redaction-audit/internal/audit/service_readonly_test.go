@@ -119,11 +119,10 @@ func TestService_RunWorkspace_NeverWritesCaptureData_Integration(t *testing.T) {
 		t.Fatalf("connect runtime pool: %v", err)
 	}
 	t.Cleanup(runtimePool.Close)
-	runtimeQ := sqlcgen.New(runtimePool)
 
 	before := captureDataDigest(t, ctx, q, []string{"cap_ro"})
 
-	svc := New(runtimeQ, &fakeSink{})
+	svc := New(NewPoolStore(runtimePool), &fakeSink{})
 	findings, err := svc.RunWorkspace(ctx, ws.ID, 0)
 	if err != nil {
 		t.Fatalf("RunWorkspace: %v", err)
@@ -159,5 +158,96 @@ func TestService_RunWorkspace_NeverWritesCaptureData_Integration(t *testing.T) {
 	}
 	if auditFindings[0].EvaluationRulesetVersion != 1 || !auditFindings[0].AppliedRulesetVersion.Valid || auditFindings[0].AppliedRulesetVersion.Int32 != 1 {
 		t.Fatalf("finding missing version pair: %+v", auditFindings[0])
+	}
+}
+
+// TestPoolStore_CreateFindingAndAuditLog_AtomicOnFailure proves the fix for
+// the critical review finding: the finding-row insert and the audit_log
+// insert must commit together or not at all. It forces the SECOND write
+// (audit_log) to fail with a real FK violation (a workspace_id that doesn't
+// exist) against a real Postgres transaction, and asserts the FIRST write
+// (the finding row) was rolled back too — proving this isn't two
+// independent inserts that can diverge if the process dies between them.
+func TestPoolStore_CreateFindingAndAuditLog_AtomicOnFailure(t *testing.T) {
+	ctx := context.Background()
+	migrationDSN := testsupport.Postgres(t, ctx)
+
+	sqlDB, err := sql.Open("pgx", migrationDSN)
+	if err != nil {
+		t.Fatalf("open migration db: %v", err)
+	}
+	defer func() { _ = sqlDB.Close() }()
+	if err := migrate.Up(sqlDB); err != nil {
+		t.Fatalf("run migrations: %v", err)
+	}
+
+	migrationPool, err := pgxpool.New(ctx, migrationDSN)
+	if err != nil {
+		t.Fatalf("connect migration pool: %v", err)
+	}
+	defer migrationPool.Close()
+	q := sqlcgen.New(migrationPool)
+
+	ws, err := q.CreateWorkspace(ctx, sqlcgen.CreateWorkspaceParams{ID: "ws_atomic", Name: "Acme"})
+	if err != nil {
+		t.Fatalf("seed workspace: %v", err)
+	}
+	proj, err := q.CreateProject(ctx, sqlcgen.CreateProjectParams{ID: "proj_atomic", WorkspaceID: ws.ID, Name: "Web"})
+	if err != nil {
+		t.Fatalf("seed project: %v", err)
+	}
+	if _, err := q.CreateCapture(ctx, sqlcgen.CreateCaptureParams{
+		ID: "cap_atomic", WorkspaceID: ws.ID, ProjectID: proj.ID,
+		Source: "extension", State: "ready", Fidelity: "full",
+		Epoch:    pgtype.Timestamptz{Time: time.Now(), Valid: true},
+		Env:      []byte("{}"),
+		Metadata: []byte("{}"),
+		Doc:      []byte("{}"),
+	}); err != nil {
+		t.Fatalf("seed capture: %v", err)
+	}
+
+	runtimeDSN, err := db.WithRuntimeRole(migrationDSN, testsupport.RuntimeRolePassword)
+	if err != nil {
+		t.Fatalf("build runtime dsn: %v", err)
+	}
+	runtimePool, err := db.NewPool(ctx, runtimeDSN)
+	if err != nil {
+		t.Fatalf("connect runtime pool: %v", err)
+	}
+	t.Cleanup(runtimePool.Close)
+
+	store := NewPoolStore(runtimePool)
+
+	_, err = store.CreateFindingAndAuditLog(ctx,
+		sqlcgen.CreateRedactionAuditFindingParams{
+			ID:                       "finding_atomic",
+			CaptureID:                "cap_atomic",
+			WorkspaceID:              ws.ID,
+			EvaluationRulesetVersion: 1,
+			RuleIds:                  []byte(`[]`),
+			EventIds:                 []byte(`[]`),
+		},
+		sqlcgen.CreateAuditLogParams{
+			ID: "auditlog_atomic",
+			// A workspace that does not exist: the audit_log FK forces this
+			// second write to fail after the first write would have
+			// succeeded on its own.
+			WorkspaceID: "ws_does_not_exist",
+			Action:      "redaction_audit.finding",
+			Subject:     "cap_atomic",
+			Details:     []byte(`{}`),
+		},
+	)
+	if err == nil {
+		t.Fatal("expected the audit_log FK violation to surface as an error")
+	}
+
+	findings, err := q.ListRedactionAuditFindingsByCapture(ctx, "cap_atomic")
+	if err != nil {
+		t.Fatalf("list findings: %v", err)
+	}
+	if len(findings) != 0 {
+		t.Fatalf("expected the finding row to be rolled back with the failed audit_log write, got %d rows", len(findings))
 	}
 }

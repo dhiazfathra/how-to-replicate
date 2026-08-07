@@ -24,6 +24,11 @@ WHERE id = $1 RETURNING id, workspace_id, project_id, source, state, fidelity, c
 // around. Instead the disclosable content columns are wiped in place,
 // which is what actually carries redaction/PHI risk; the row itself
 // persists, permanently non-ready, as its own tombstone.
+// (Edge case: a capture with zero recorded events/mutations/comments has
+// no blocking child row, so nothing here actually prevents a hard delete
+// for it — the in-place clear above is what we always do regardless,
+// so this UPDATE-not-DELETE choice is deliberate for every capture, not
+// just the ones an FK would otherwise block.)
 func (q *Queries) ClearCaptureContentForPurge(ctx context.Context, id string) (Capture, error) {
 	row := q.db.QueryRow(ctx, clearCaptureContentForPurge, id)
 	var i Capture
