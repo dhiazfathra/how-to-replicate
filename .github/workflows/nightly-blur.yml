@@ -1,0 +1,41 @@
+name: Nightly video-blur OCR
+
+on:
+  schedule:
+    # 03:00 UTC daily. Slow (record + decode + OCR), so nightly rather than
+    # every PR — the non-video redaction corpus keeps gating every PR instead.
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  blur-ocr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
+      # Draws known synthetic PHI text into a canvas, blurs it with the real
+      # pre-encode blur code, records + decodes an actual video/webm through
+      # it, then OCRs the decoded frames and fails loudly on any match.
+      - name: Video-blur OCR corpus
+        run: pnpm e2e:nightly
+
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-blur-ocr-results
+          path: e2e-nightly/artifacts/test-results
+          retention-days: 14

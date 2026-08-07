@@ -152,3 +152,9 @@ e2e/public/harness.js
 e2e/artifacts/test-results/
 e2e/artifacts/report/
 # e2e/artifacts/videos/ is committed on purpose — it is the recorded evidence.
+
+# Nightly video-blur OCR job
+e2e-nightly/public/fixture.js
+e2e-nightly/artifacts/
+# tesseract.js downloads its language model into the cwd at runtime.
+*.traineddata

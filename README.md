@@ -81,7 +81,8 @@ packages/
   capture-core/       event model, redaction, step generator, storage, store
   llm/                provider interface + HTTP and native-messaging impls
   trackers/           provider interface + GitHub, GitLab impls
-e2e/                  Playwright end-to-end suite + recorded evidence
+e2e/                  Playwright end-to-end suite (PR-gating) + recorded evidence
+e2e-nightly/          Playwright video-blur OCR job (nightly, slow)
 cli/                  agent-facing CLI (Phase 2 — not built)
 services/             Go services (Phase 1+ — not built)
 docs/
@@ -121,8 +122,9 @@ pnpm exec playwright install --with-deps chromium
 | `pnpm test:coverage` | Unit tests with coverage thresholds enforced |
 | `pnpm e2e` | Builds, then runs the Playwright end-to-end suite in real Chromium |
 | `pnpm e2e:report` | Opens the HTML report from the last e2e run |
-| `pnpm lint` | ESLint over packages, clients, and e2e |
-| `pnpm typecheck` | `tsc -b` over the workspace, plus the e2e project |
+| `pnpm e2e:nightly` | Runs the video-blur OCR job (slow — records, decodes, and OCRs real video) |
+| `pnpm lint` | ESLint over packages, clients, e2e, and e2e-nightly |
+| `pnpm typecheck` | `tsc -b` over the workspace, plus the e2e and e2e-nightly projects |
 | `pnpm check:deps` | Enforces invariant 5 — `capture-core` imports nothing from `clients/` |
 
 ## Running the extension
@@ -166,6 +168,8 @@ re-cut the committed evidence, run `HTR_REFRESH_EVIDENCE=1 pnpm e2e`.
 | `pipeline.spec.ts` — invariant 4 | A legacy endpoint whose body shape defeats a `field-path` rule makes the engine fail closed and drop the event. Asserts the dropped request is not persisted at all, the capture lands `degraded`, and the viewer says so. |
 | `gate.spec.ts` — invariant 1 | Captures seeded in `failed` and `composing` render none of their document — not the title, summary, steps, timeline, player, nor the fidelity badge — and never appear in the palette. Asserted against unique marker strings, not element absence. |
 | `extension.spec.ts` | The real MV3 extension loads into real Chrome, its service worker boots, its content script injects, and a real click travels content script → service worker as a real `CaptureEvent`. Emits nothing before a session starts, and stops emitting after one ends. |
+| `service-worker.spec.ts` — off-allow-list refusal | `createServiceWorker` (production code) refuses to start a capture for an origin not on the loaded ruleset — no `chrome.debugger.attach` call happens at all. |
+| `service-worker.spec.ts` — CDP-detach handoff | A real CDP session backing an active capture is detached mid-capture; the production `onDetach` handler flips fidelity to `degraded` and records the handoff as a `lifecycle` event. |
 
 Events reach the pipeline through a real CDP session (`Network`, `Runtime`, `Console`
 domains), mapped by the extension's own `mapCdpEvent`. Playwright stands in for
@@ -181,23 +185,62 @@ with the synthetic PHI in the URL, headers, and body replaced by
 `[REDACTED:*]`/`[REDACTED]` and the exact redaction rules that fired recorded per
 event.
 
+### service-worker.spec.ts: how it gets a real ruleset without a real policy
+
+`extension.spec.ts` loads the real unpacked extension via `launchPersistentContext`,
+but the with-ruleset branch of `serviceWorker.start()` (off-allow-list refusal,
+CDP-detach handoff) needs a non-empty `chrome.storage.managed` — and managed policy
+storage is only populated by an OS-level enterprise policy file, unavailable to the
+vanilla Chromium binary Playwright drives. `service-worker.spec.ts` instead imports
+`createServiceWorker` directly (the same production module `clients/extension/src/
+background/main.ts` wires against the real `chrome` global) and drives it against a
+real Playwright page and a real CDP session for `chrome.debugger`; only the handful
+of Chrome namespaces unreachable outside a loaded extension (`storage.managed`,
+`tabs`, `action`, `webRequest`) are stubbed, same as `service-worker.test.ts`'s unit
+tests. The CDP session really attaches and really detaches; only the delivery of
+Chrome's own `onDetach` event (which nothing outside a loaded extension can trigger)
+is invoked directly, immediately after that real detach.
+
 ### What the e2e does not cover
 
 Stated plainly, because a test suite that overstates itself is worse than a small one:
 
-- **Video capture and pre-encode blur (invariant 2).** `getDisplayMedia` needs a
-  screen-picker grant that a headless CI run cannot give. The blur compositor, frame
-  budget, and screenshot-only degrade path are unit-tested only.
+- **Video capture via `getDisplayMedia` (invariant 2).** It needs a screen-picker
+  grant that a headless CI run cannot give. The frame-budget monitor and
+  screenshot-only degrade path are unit-tested only. (The blur compositor itself —
+  the part that actually removes PHI from a frame — is covered end-to-end by the
+  nightly job below.)
 - **The toolbar-click path in a real browser.** `chrome.action.onClicked` cannot be
-  synthesized from a test, and `chrome.storage.managed` needs an enterprise-managed
-  profile. The e2e asserts the fail-closed side (no ruleset, no capture); the
-  with-ruleset branch of `serviceWorker.start()` is unit-tested.
+  synthesized from a test. `extension.spec.ts` asserts the fail-closed side (no
+  ruleset, no capture); `service-worker.spec.ts` covers the with-ruleset branches
+  (see above) by driving `createServiceWorker` directly instead of the toolbar.
 - **`navigation` events.** Nothing in `clients/` emits them yet even though
   `generateDoc` renders them; the e2e harness mints them from a real `hashchange`.
   A real gap, not a test shortcut.
 - **LLM enrichment and issue routing.** `packages/llm` and `packages/trackers` are
   unit-tested against recorded fixtures; the e2e exercises the deterministic
   document floor only.
+
+## Nightly video-blur OCR job
+
+The redaction corpus (`packages/capture-core/test/redaction-corpus.test.ts`) gates
+every PR but only covers text-shaped PHI — JSON bodies, headers, DOM text. Video
+frames are the one place PHI can leak in pixels rather than characters, and OCR-ing
+real recorded video is slow (multiple seconds per frame), so it runs as its own
+nightly workflow ([`.github/workflows/nightly-blur.yml`](.github/workflows/nightly-blur.yml))
+instead of gating every PR — run it locally with `pnpm e2e:nightly`.
+
+`e2e-nightly/fixture/entry.ts` draws known synthetic PHI text onto a canvas, blurs it
+through the real pre-encode blur code (`compositeFrame`/`validateRegions` from
+`@htr/capture-core`, the same functions the offscreen recorder drives), records the
+canvas's own `MediaStream` with a real `MediaRecorder` into an actual `video/webm`
+blob, and decodes stills back out of that recording through a real `<video>` element
+— encode, then decode, the same round trip a persisted capture goes through.
+`e2e-nightly/blur-ocr.spec.ts` then OCRs (`tesseract.js`) the decoded stills and fails
+the job if the PHI text is recovered from any of them. It also OCRs one frame from
+the same pipeline with blurring disabled and asserts the PHI text *is* recovered
+there — proof the "not found" assertion on the blurred frames isn't vacuous. A match
+fails the job outright; nothing here is `continue-on-error`.
 
 ## Contributing
 
