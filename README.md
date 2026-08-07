@@ -80,7 +80,7 @@ clients/
 packages/
   capture-core/       event model, redaction, step generator, storage, store, sync engine (Task 7)
   llm/                provider interface + HTTP and native-messaging impls
-  trackers/           provider interface + GitHub, GitLab impls
+  trackers/           provider interface + GitHub, GitLab, Slack impls
 e2e/                  Playwright end-to-end suite (PR-gating) + recorded evidence
 e2e-nightly/          Playwright video-blur OCR job (nightly, slow)
 cli/                  agent-facing CLI (Phase 2 — not built)

@@ -1,0 +1,9 @@
+{
+  "ok": true,
+  "access_token": "xoxb-slack-access-token",
+  "token_type": "bot",
+  "refresh_token": "xoxe-1-slack-refresh-token",
+  "expires_in": 43200,
+  "scope": "chat:write",
+  "team": { "id": "T0123", "name": "htr" }
+}
