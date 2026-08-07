@@ -1,0 +1,17 @@
+{
+  "name": "@htr/sdk",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check:bundle-size": "node scripts/check-bundle-size.mjs"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@htr/capture-core": "workspace:*",
+    "esbuild": "^0.25.0"
+  }
+}

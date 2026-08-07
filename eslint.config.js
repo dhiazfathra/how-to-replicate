@@ -25,7 +25,14 @@ export default tseslint.config(
     },
   },
   {
-    files: ['**/*.config.ts', 'scripts/*.mjs', 'e2e/*.mjs', 'e2e-nightly/*.mjs', '**/*.test.mjs'],
+    files: [
+      '**/*.config.ts',
+      'scripts/*.mjs',
+      'packages/*/scripts/*.mjs',
+      'e2e/*.mjs',
+      'e2e-nightly/*.mjs',
+      '**/*.test.mjs',
+    ],
     extends: [...tseslint.configs.recommended],
     languageOptions: {
       parserOptions: {

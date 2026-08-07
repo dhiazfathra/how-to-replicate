@@ -132,6 +132,15 @@ importers:
         specifier: workspace:*
         version: link:../capture-core
 
+  packages/sdk:
+    devDependencies:
+      '@htr/capture-core':
+        specifier: workspace:*
+        version: link:../capture-core
+      esbuild:
+        specifier: ^0.25.0
+        version: 0.25.12
+
   packages/trackers:
     devDependencies:
       '@htr/capture-core':

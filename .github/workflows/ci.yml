@@ -189,6 +189,28 @@ jobs:
             exit 1
           fi
 
+  sdk-bundle-size:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Fails if the minified/gzipped SDK bundle exceeds its size budget —
+      # keeps "must not bundle the whole of capture-core" enforced on every
+      # PR, not just true on the day someone measured it.
+      - name: Check SDK bundle size
+        working-directory: packages/sdk
+        run: pnpm check:bundle-size
+
   buf-check:
     runs-on: ubuntu-latest
     steps:

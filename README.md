@@ -81,6 +81,7 @@ packages/
   capture-core/       event model, redaction, step generator, storage, store, sync engine (Task 7)
   llm/                provider interface + HTTP and native-messaging impls
   trackers/           provider interface + GitHub, GitLab, Slack impls
+  sdk/                zero-dependency browser SDK host apps embed — `htr.metadata()` (Task 15)
 e2e/                  Playwright end-to-end suite (PR-gating) + recorded evidence
 e2e-nightly/          Playwright video-blur OCR job (nightly, slow)
 cli/                  agent-facing CLI (Phase 2 — not built)
@@ -614,6 +615,28 @@ Stated plainly, because a test suite that overstates itself is worse than a smal
 - **LLM enrichment and issue routing.** `packages/llm` and `packages/trackers` are
   unit-tested against recorded fixtures; the e2e exercises the deterministic
   document floor only.
+
+## SDK (`packages/sdk`)
+
+A zero-dependency browser SDK host applications embed directly (no extension
+required) to enrich a capture with app-specific context:
+
+```ts
+import { htr } from '@htr/sdk';
+
+htr.metadata({ userId, tenant, buildSha, featureFlags });
+```
+
+`metadata()` merges into an accumulated snapshot (last write wins per key) and
+returns it redaction-scanned — routed through the same `createRedactor` engine
+Phase 0 built (`packages/capture-core/src/redaction/engine.js`), imported by
+submodule path rather than the package's main barrel so the SDK never drags in
+IndexedDB storage or media/blur code it doesn't run. Captures written this way
+carry `source: 'sdk'`. A dropped field is recorded in `redaction.rulesApplied`,
+the same shape `CaptureEvent.redaction` already uses. See
+[`packages/sdk/README.md`](packages/sdk/README.md) for embed details, and
+`pnpm --filter @htr/sdk check:bundle-size` (also gated in CI) for the current
+bundle size.
 
 ## Nightly video-blur OCR job
 
