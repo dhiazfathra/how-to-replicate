@@ -128,4 +128,42 @@ export class CaptureRepository {
     await Promise.all(ops);
     await tx.done;
   }
+
+  /**
+   * Eviction: removes a capture's local events/assets/chunks but keeps the
+   * capture metadata row, marked `localAssets: false`, so the viewer can
+   * offer to re-fetch from the server instead of showing a broken capture.
+   * Never deletes the capture record itself — see deleteCapture for that.
+   */
+  async evictLocalAssets(id: string): Promise<void> {
+    const tx = this.db.transaction(
+      ['captures', 'events', 'assets', 'asset_chunks'],
+      'readwrite',
+    );
+    const capturesStore = tx.objectStore('captures');
+    const eventsStore = tx.objectStore('events');
+    const assetsStore = tx.objectStore('assets');
+    const range = IDBKeyRange.bound([id, -Infinity], [id, Infinity]);
+
+    const [capture, eventKeys, assets] = await Promise.all([
+      capturesStore.get(id),
+      eventsStore.index('by-capture').getAllKeys(range),
+      assetsStore.index('by-capture').getAllKeys(id),
+    ]);
+
+    const ops: Promise<unknown>[] = [
+      ...eventKeys.map((key) => eventsStore.delete(key)),
+      ...assets.map((assetId) => assetsStore.delete(assetId)),
+      ...assets.map((assetId) =>
+        tx
+          .objectStore('asset_chunks')
+          .delete(IDBKeyRange.bound([assetId, 0], [assetId, Infinity])),
+      ),
+    ];
+    if (capture) {
+      ops.push(capturesStore.put({ ...capture, assets: [], localAssets: false }));
+    }
+    await Promise.all(ops);
+    await tx.done;
+  }
 }

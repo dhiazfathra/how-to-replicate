@@ -47,7 +47,7 @@ Downstream of those:
 | Capture | CDP primary, marked fallback on DevTools detach ([006](docs/decisions/ADR-006-client-side-capture-via-cdp.md)) |
 | Documents | Deterministic generation always; LLM enrichment validated against the timeline ([007](docs/decisions/ADR-007-pluggable-llm-providers.md)) |
 | Routing | GitHub device flow, GitLab PKCE — no client secret ships ([008](docs/decisions/ADR-008-tracker-provider-abstraction.md)) |
-| Storage | Explicit budget; refuse-to-record rather than evict the only copy ([009](docs/decisions/ADR-009-local-storage-budget.md)) |
+| Storage | Explicit budget; refuse-to-record unless a capture is LRU-evictable, i.e. `sync.manifestComplete === true` ([009](docs/decisions/ADR-009-local-storage-budget.md)) |
 | Sync (P1) | Mutation queue, delta pull, last-write-wins per field. No CRDT ([012](docs/decisions/ADR-012-sync-protocol.md)) |
 
 ## Invariants
