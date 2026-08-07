@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/dhiazfathra/how-to-replicate/services/internal/db/sqlcgen"
 )
@@ -25,6 +26,65 @@ type fakeQuerier struct {
 	membership  sqlcgen.Membership
 	deletedRows int64
 	err         error
+
+	capture    sqlcgen.Capture
+	captureErr error
+	captures   []sqlcgen.Capture
+	events     []sqlcgen.CaptureEvent
+	eventsErr  error
+	comment    sqlcgen.Comment
+	shareLink  sqlcgen.ShareLink
+	shareErr   error
+	revokeErr  error
+	auditLog   sqlcgen.AuditLog
+}
+
+// captureErrOr returns captureErr if set, else the shared err field — most
+// tests only need one error source, but RevokeShareLink's two-step
+// GetShareLink-then-GetCapture flow needs to fail either step
+// independently.
+func (f fakeQuerier) captureErrOr() error {
+	if f.captureErr != nil {
+		return f.captureErr
+	}
+	return f.err
+}
+
+func (f fakeQuerier) GetCaptureForWorkspace(context.Context, sqlcgen.GetCaptureForWorkspaceParams) (sqlcgen.Capture, error) {
+	return f.capture, f.captureErrOr()
+}
+func (f fakeQuerier) GetCapture(context.Context, string) (sqlcgen.Capture, error) {
+	return f.capture, f.captureErrOr()
+}
+func (f fakeQuerier) ListCapturesByWorkspace(context.Context, string) ([]sqlcgen.Capture, error) {
+	return f.captures, f.err
+}
+func (f fakeQuerier) ListCaptureEventsByCapture(context.Context, string) ([]sqlcgen.CaptureEvent, error) {
+	if f.eventsErr != nil {
+		return nil, f.eventsErr
+	}
+	return f.events, nil
+}
+func (f fakeQuerier) CreateComment(context.Context, sqlcgen.CreateCommentParams) (sqlcgen.Comment, error) {
+	return f.comment, f.err
+}
+func (f fakeQuerier) CreateShareLink(context.Context, sqlcgen.CreateShareLinkParams) (sqlcgen.ShareLink, error) {
+	return f.shareLink, f.err
+}
+func (f fakeQuerier) GetShareLink(context.Context, string) (sqlcgen.ShareLink, error) {
+	if f.shareErr != nil {
+		return f.shareLink, f.shareErr
+	}
+	return f.shareLink, f.err
+}
+func (f fakeQuerier) RevokeShareLink(context.Context, string) (sqlcgen.ShareLink, error) {
+	if f.revokeErr != nil {
+		return f.shareLink, f.revokeErr
+	}
+	return f.shareLink, f.err
+}
+func (f fakeQuerier) CreateAuditLog(context.Context, sqlcgen.CreateAuditLogParams) (sqlcgen.AuditLog, error) {
+	return f.auditLog, f.err
 }
 
 func (f fakeQuerier) CreateWorkspace(context.Context, sqlcgen.CreateWorkspaceParams) (sqlcgen.Workspace, error) {
@@ -218,5 +278,177 @@ func TestStore_SetPolicyOverrides(t *testing.T) {
 	got, err := s.SetPolicyOverrides(t.Context(), "ws_1", []byte(`{"localOnly":false}`))
 	if err != nil || got.ID != ws.ID {
 		t.Fatalf("SetPolicyOverrides() = (%v, %v)", got, err)
+	}
+}
+
+func TestStore_GetCapture(t *testing.T) {
+	c := sqlcgen.Capture{ID: "cap_1", WorkspaceID: "ws_1"}
+	s := New(fakeQuerier{capture: c})
+
+	got, err := s.GetCapture(t.Context(), "cap_1", "ws_1")
+	if err != nil || got.ID != c.ID {
+		t.Fatalf("GetCapture() = (%v, %v)", got, err)
+	}
+
+	s = New(fakeQuerier{captureErr: pgx.ErrNoRows})
+	if _, err := s.GetCapture(t.Context(), "missing", "ws_1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetCapture() error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestStore_GetCaptureByID(t *testing.T) {
+	c := sqlcgen.Capture{ID: "cap_1"}
+	s := New(fakeQuerier{capture: c})
+
+	got, err := s.GetCaptureByID(t.Context(), "cap_1")
+	if err != nil || got.ID != c.ID {
+		t.Fatalf("GetCaptureByID() = (%v, %v)", got, err)
+	}
+
+	s = New(fakeQuerier{captureErr: pgx.ErrNoRows})
+	if _, err := s.GetCaptureByID(t.Context(), "missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetCaptureByID() error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestStore_ListCaptures(t *testing.T) {
+	cs := []sqlcgen.Capture{{ID: "cap_1"}}
+	s := New(fakeQuerier{captures: cs})
+
+	got, err := s.ListCaptures(t.Context(), "ws_1")
+	if err != nil || len(got) != 1 {
+		t.Fatalf("ListCaptures() = (%v, %v)", got, err)
+	}
+
+	s = New(fakeQuerier{err: errors.New("boom")})
+	if _, err := s.ListCaptures(t.Context(), "ws_1"); err == nil {
+		t.Fatal("ListCaptures() want error")
+	}
+}
+
+func TestStore_ListEvents(t *testing.T) {
+	evs := []sqlcgen.CaptureEvent{{ID: "ev_1"}}
+	s := New(fakeQuerier{events: evs})
+
+	got, err := s.ListEvents(t.Context(), "cap_1", "ws_1")
+	if err != nil || len(got) != 1 {
+		t.Fatalf("ListEvents() = (%v, %v)", got, err)
+	}
+
+	t.Run("capture not in workspace", func(t *testing.T) {
+		s := New(fakeQuerier{captureErr: pgx.ErrNoRows})
+		if _, err := s.ListEvents(t.Context(), "cap_1", "ws_1"); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("ListEvents() error = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("query error", func(t *testing.T) {
+		s := New(fakeQuerier{eventsErr: errors.New("boom")})
+		if _, err := s.ListEvents(t.Context(), "cap_1", "ws_1"); err == nil {
+			t.Fatal("ListEvents() want error")
+		}
+	})
+}
+
+func TestStore_CreateComment(t *testing.T) {
+	c := sqlcgen.Comment{ID: "cm_1", CaptureID: "cap_1"}
+	s := New(fakeQuerier{comment: c})
+
+	got, err := s.CreateComment(t.Context(), "cm_1", "cap_1", "ws_1", "user-1", "hi")
+	if err != nil || got.ID != c.ID {
+		t.Fatalf("CreateComment() = (%v, %v)", got, err)
+	}
+
+	t.Run("capture not in workspace", func(t *testing.T) {
+		s := New(fakeQuerier{captureErr: pgx.ErrNoRows})
+		if _, err := s.CreateComment(t.Context(), "cm_1", "cap_1", "ws_1", "user-1", "hi"); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("CreateComment() error = %v, want ErrNotFound", err)
+		}
+	})
+}
+
+func TestStore_CreateShareLink(t *testing.T) {
+	sl := sqlcgen.ShareLink{ID: "sl_1", CaptureID: "cap_1"}
+	s := New(fakeQuerier{shareLink: sl})
+
+	got, err := s.CreateShareLink(t.Context(), "sl_1", "cap_1", "ws_1", "user-1", "token", pgtype.Timestamptz{})
+	if err != nil || got.ID != sl.ID {
+		t.Fatalf("CreateShareLink() = (%v, %v)", got, err)
+	}
+
+	t.Run("capture not in workspace", func(t *testing.T) {
+		s := New(fakeQuerier{captureErr: pgx.ErrNoRows})
+		if _, err := s.CreateShareLink(t.Context(), "sl_1", "cap_1", "ws_1", "user-1", "token", pgtype.Timestamptz{}); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("CreateShareLink() error = %v, want ErrNotFound", err)
+		}
+	})
+}
+
+func TestStore_RevokeShareLink(t *testing.T) {
+	sl := sqlcgen.ShareLink{ID: "sl_1", CaptureID: "cap_1"}
+	s := New(fakeQuerier{shareLink: sl})
+
+	got, err := s.RevokeShareLink(t.Context(), "sl_1", "ws_1")
+	if err != nil || got.ID != sl.ID {
+		t.Fatalf("RevokeShareLink() = (%v, %v)", got, err)
+	}
+
+	t.Run("share link not found", func(t *testing.T) {
+		s := New(fakeQuerier{shareErr: pgx.ErrNoRows})
+		if _, err := s.RevokeShareLink(t.Context(), "sl_1", "ws_1"); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("RevokeShareLink() error = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("capture not in workspace", func(t *testing.T) {
+		s := New(fakeQuerier{shareLink: sl, captureErr: pgx.ErrNoRows})
+		if _, err := s.RevokeShareLink(t.Context(), "sl_1", "ws_1"); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("RevokeShareLink() error = %v, want ErrNotFound", err)
+		}
+	})
+
+	t.Run("revoke query error", func(t *testing.T) {
+		s := New(fakeQuerier{shareLink: sl, revokeErr: errors.New("boom")})
+		if _, err := s.RevokeShareLink(t.Context(), "sl_1", "ws_1"); err == nil {
+			t.Fatal("RevokeShareLink() want error")
+		}
+	})
+}
+
+func TestStore_GetShareLink(t *testing.T) {
+	sl := sqlcgen.ShareLink{ID: "sl_1"}
+	s := New(fakeQuerier{shareLink: sl})
+
+	got, err := s.GetShareLink(t.Context(), "sl_1")
+	if err != nil || got.ID != sl.ID {
+		t.Fatalf("GetShareLink() = (%v, %v)", got, err)
+	}
+
+	s = New(fakeQuerier{shareErr: pgx.ErrNoRows})
+	if _, err := s.GetShareLink(t.Context(), "missing"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("GetShareLink() error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestStore_CreateAuditLog(t *testing.T) {
+	al := sqlcgen.AuditLog{ID: "al_1"}
+	s := New(fakeQuerier{auditLog: al})
+
+	got, err := s.CreateAuditLog(t.Context(), "al_1", "ws_1", "user-1", "share_link.resolve", "cap_1", []byte(`{}`))
+	if err != nil || got.ID != al.ID {
+		t.Fatalf("CreateAuditLog() = (%v, %v)", got, err)
+	}
+
+	// actorID == "" is the unauthenticated share-link-resolver path — it
+	// must map to a NULL actor_id (pgtype.Text.Valid == false), not the
+	// literal empty string, which is exercised indirectly here via a
+	// no-error round trip.
+	if _, err := s.CreateAuditLog(t.Context(), "al_1", "ws_1", "", "share_link.resolve", "cap_1", []byte(`{}`)); err != nil {
+		t.Fatalf("CreateAuditLog() with empty actorID = %v", err)
+	}
+
+	s = New(fakeQuerier{err: errors.New("boom")})
+	if _, err := s.CreateAuditLog(t.Context(), "al_1", "ws_1", "user-1", "share_link.resolve", "cap_1", nil); err == nil {
+		t.Fatal("CreateAuditLog() want error")
 	}
 }

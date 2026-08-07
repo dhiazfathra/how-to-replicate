@@ -11,6 +11,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/dhiazfathra/how-to-replicate/services/internal/authz"
 	"github.com/dhiazfathra/how-to-replicate/services/internal/db"
@@ -179,6 +180,109 @@ func (s *Store) CreateMembership(ctx context.Context, id, workspaceID, userID, r
 		ID: id, WorkspaceID: workspaceID, UserID: userID, Role: role,
 	})
 	return m, wrapNotFound(err)
+}
+
+// GetCapture returns the capture with id in workspaceID, or ErrNotFound if
+// it doesn't exist or belongs to a different workspace — same
+// no-existence-leak shape as GetProject.
+func (s *Store) GetCapture(ctx context.Context, id, workspaceID string) (sqlcgen.Capture, error) {
+	c, err := s.q.GetCaptureForWorkspace(ctx, sqlcgen.GetCaptureForWorkspaceParams{
+		ID: id, WorkspaceID: workspaceID,
+	})
+	return c, wrapNotFound(err)
+}
+
+// GetCaptureByID returns the capture with id, with no workspace scoping.
+// Used only by the (unauthenticated) share-link resolver, which has no
+// workspace context to scope by — the token's signature plus the
+// revocation/ready checks are what gate access there instead.
+func (s *Store) GetCaptureByID(ctx context.Context, id string) (sqlcgen.Capture, error) {
+	c, err := s.q.GetCapture(ctx, id)
+	return c, wrapNotFound(err)
+}
+
+// ListCaptures returns every capture in workspaceID, oldest first.
+func (s *Store) ListCaptures(ctx context.Context, workspaceID string) ([]sqlcgen.Capture, error) {
+	cs, err := s.q.ListCapturesByWorkspace(ctx, workspaceID)
+	if err != nil {
+		return nil, fmt.Errorf("store: %w", err)
+	}
+	return cs, nil
+}
+
+// ListEvents returns every event for captureID, in timeline order, but only
+// if captureID belongs to workspaceID — same workspace-scoping requirement
+// as GetCapture.
+func (s *Store) ListEvents(ctx context.Context, captureID, workspaceID string) ([]sqlcgen.CaptureEvent, error) {
+	if _, err := s.GetCapture(ctx, captureID, workspaceID); err != nil {
+		return nil, err
+	}
+	evs, err := s.q.ListCaptureEventsByCapture(ctx, captureID)
+	if err != nil {
+		return nil, fmt.Errorf("store: %w", err)
+	}
+	return evs, nil
+}
+
+// CreateComment appends a comment to captureID, after verifying captureID
+// belongs to workspaceID (comments are append-only and workspace-scoped —
+// a capture ID from another workspace must behave like it doesn't exist).
+func (s *Store) CreateComment(ctx context.Context, id, captureID, workspaceID, authorID, body string) (sqlcgen.Comment, error) {
+	if _, err := s.GetCapture(ctx, captureID, workspaceID); err != nil {
+		return sqlcgen.Comment{}, err
+	}
+	c, err := s.q.CreateComment(ctx, sqlcgen.CreateCommentParams{
+		ID: id, CaptureID: captureID, AuthorID: authorID, Body: body,
+	})
+	return c, wrapNotFound(err)
+}
+
+// CreateShareLink creates a share link row for captureID, after verifying
+// captureID belongs to workspaceID.
+func (s *Store) CreateShareLink(ctx context.Context, id, captureID, workspaceID, createdBy, token string, expiresAt pgtype.Timestamptz) (sqlcgen.ShareLink, error) {
+	if _, err := s.GetCapture(ctx, captureID, workspaceID); err != nil {
+		return sqlcgen.ShareLink{}, err
+	}
+	sl, err := s.q.CreateShareLink(ctx, sqlcgen.CreateShareLinkParams{
+		ID: id, CaptureID: captureID, Token: token, CreatedBy: createdBy, ExpiresAt: expiresAt,
+	})
+	return sl, wrapNotFound(err)
+}
+
+// RevokeShareLink marks the share link with id revoked, after verifying it
+// belongs to a capture in workspaceID.
+func (s *Store) RevokeShareLink(ctx context.Context, id, workspaceID string) (sqlcgen.ShareLink, error) {
+	sl, err := s.q.GetShareLink(ctx, id)
+	if err != nil {
+		return sqlcgen.ShareLink{}, wrapNotFound(err)
+	}
+	if _, err := s.GetCapture(ctx, sl.CaptureID, workspaceID); err != nil {
+		return sqlcgen.ShareLink{}, err
+	}
+	sl, err = s.q.RevokeShareLink(ctx, id)
+	return sl, wrapNotFound(err)
+}
+
+// GetShareLink returns the share link row with id, or ErrNotFound. Used by
+// the (unauthenticated) share-link resolver — no workspace scoping, since
+// the whole point of a share link is access without a workspace
+// membership.
+func (s *Store) GetShareLink(ctx context.Context, id string) (sqlcgen.ShareLink, error) {
+	sl, err := s.q.GetShareLink(ctx, id)
+	return sl, wrapNotFound(err)
+}
+
+// CreateAuditLog records an audit_log row.
+func (s *Store) CreateAuditLog(ctx context.Context, id, workspaceID, actorID, action, subject string, details []byte) (sqlcgen.AuditLog, error) {
+	al, err := s.q.CreateAuditLog(ctx, sqlcgen.CreateAuditLogParams{
+		ID:          id,
+		WorkspaceID: workspaceID,
+		ActorID:     pgtype.Text{String: actorID, Valid: actorID != ""},
+		Action:      action,
+		Subject:     subject,
+		Details:     details,
+	})
+	return al, wrapNotFound(err)
 }
 
 // RoleInWorkspace returns userID's role in workspaceID, and false if
