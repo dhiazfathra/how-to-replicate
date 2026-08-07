@@ -1,0 +1,17 @@
+{
+  "type": "object",
+  "properties": {
+    "ruleset": {
+      "type": "object",
+      "description": "A RedactionRuleset (see @htr/capture-core `redaction/ruleset.ts`) pushed by policy. Its `origin-allow` rule is the sole source of truth for which origins may be captured at all.",
+      "properties": {
+        "version": { "type": "string" },
+        "rules": {
+          "type": "array",
+          "items": { "type": "object" }
+        }
+      },
+      "required": ["version", "rules"]
+    }
+  }
+}

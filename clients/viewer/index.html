@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>How to Replicate — Viewer</title>
+    <style>
+      /* Critical shell CSS, inlined to avoid a render-blocking stylesheet fetch. */
+      :root {
+        --shell-sidebar-width: 280px;
+        --bg: #ffffff;
+        --fg: #111111;
+      }
+      :root[data-theme='dark'] {
+        --bg: #111111;
+        --fg: #eeeeee;
+      }
+      html,
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+      }
+      #root {
+        min-height: 100vh;
+      }
+    </style>
+    <script>
+      // Boot script: restore last-known shell tokens from localStorage before
+      // first paint, so the shell doesn't flash light-then-dark or the wrong
+      // sidebar width.
+      (function () {
+        try {
+          var theme = window.localStorage.getItem('htr:theme');
+          if (theme) document.documentElement.dataset.theme = theme;
+          var sidebarWidth = window.localStorage.getItem('htr:sidebarWidth');
+          if (sidebarWidth) {
+            document.documentElement.style.setProperty('--shell-sidebar-width', sidebarWidth);
+          }
+        } catch (e) {
+          // localStorage unavailable (private mode, etc.) — fall back to defaults.
+        }
+      })();
+    </script>
+    <link rel="stylesheet" href="/src/motion.css" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

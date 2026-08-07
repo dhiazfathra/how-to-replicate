@@ -1,0 +1,11 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/capture-core" },
+    { "path": "packages/llm" },
+    { "path": "packages/trackers" },
+    { "path": "clients/extension" },
+    { "path": "clients/viewer" },
+    { "path": "clients/recording-link" }
+  ]
+}

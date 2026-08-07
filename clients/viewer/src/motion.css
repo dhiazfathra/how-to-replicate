@@ -1,0 +1,36 @@
+/*
+ * Motion tokens (repo convention: animate only transform/opacity — never
+ * width, height, margin, top, left). Durations: 100ms quick, 250ms regular,
+ * 350ms ceiling.
+ */
+:root {
+  --motion-quick: 100ms;
+  --motion-regular: 250ms;
+  --motion-ceiling: 350ms;
+}
+
+.command-palette {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+/* Appear instantly; fade out over 150ms on dismiss (asymmetric per convention). */
+.command-palette[data-state='closing'] {
+  opacity: 0;
+  transition: opacity 150ms ease-out;
+}
+
+.fidelity-badge {
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity var(--motion-quick) ease-out, transform var(--motion-quick) ease-out;
+}
+
+.steps__item {
+  transform: scale(1);
+  transition: transform var(--motion-quick) ease-out;
+}
+
+.steps__item--selected {
+  transform: scale(1.02);
+}

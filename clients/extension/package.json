@@ -1,0 +1,16 @@
+{
+  "name": "@htr/extension",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "vite build && vite build --config vite.content.config.ts"
+  },
+  "devDependencies": {
+    "@htr/capture-core": "workspace:*",
+    "fake-indexeddb": "^6.0.0",
+    "vite": "^7.3.6"
+  }
+}
