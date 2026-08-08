@@ -251,3 +251,9 @@ jobs:
         with:
           input: proto
           pr_comment: false
+          # `proto/` does not exist on `main` yet — this PR introduces it — so
+          # there is no valid prior commit for `buf breaking` to diff against
+          # (it fails with "Module had no .proto files" on the PR's base SHA).
+          # Re-enable once this PR merges: every subsequent PR's base will
+          # then actually contain `proto/`, and the check becomes meaningful.
+          breaking: false
