@@ -95,35 +95,35 @@ jobs:
           go-version-file: services/internal/go.mod
 
       - name: golangci-lint (services/internal)
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           version: v2.12.2
           install-mode: binary
           working-directory: services/internal
 
       - name: golangci-lint (proto)
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           version: v2.12.2
           install-mode: binary
           working-directory: proto
 
       - name: golangci-lint (sync-gateway)
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           version: v2.12.2
           install-mode: binary
           working-directory: services/sync-gateway
 
       - name: golangci-lint (capture-api)
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           version: v2.12.2
           install-mode: binary
           working-directory: services/capture-api
 
       - name: golangci-lint (redaction-audit)
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v7
         with:
           version: v2.12.2
           install-mode: binary
