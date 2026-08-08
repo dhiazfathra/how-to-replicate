@@ -527,10 +527,11 @@ func (f *fakeRows) Close()            {}
 type fakeDBTX struct {
 	rows     pgx.Rows
 	queryErr error
+	execErr  error
 }
 
 func (f *fakeDBTX) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
-	return pgconn.CommandTag{}, nil
+	return pgconn.CommandTag{}, f.execErr
 }
 func (f *fakeDBTX) Query(context.Context, string, ...any) (pgx.Rows, error) {
 	if f.queryErr != nil {
