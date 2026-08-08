@@ -51,11 +51,16 @@ type Attempt struct {
 // RFC 7636 required range of 43-128 characters (32 bytes -> 43 chars).
 const codeVerifierBytes = 32
 
+// randRead is a seam over crypto/rand.Read so tests can exercise randToken's
+// (and therefore NewAttempt's) error path — the real reader does not fail in
+// practice, so there is no other way to reach that branch.
+var randRead = rand.Read
+
 // randToken returns a base64url (no padding) encoding of n cryptographically
 // random bytes.
 func randToken(n int) (string, error) {
 	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
+	if _, err := randRead(b); err != nil {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil

@@ -98,30 +98,35 @@ jobs:
         uses: golangci/golangci-lint-action@v6
         with:
           version: latest
+          install-mode: goinstall
           working-directory: services/internal
 
       - name: golangci-lint (proto)
         uses: golangci/golangci-lint-action@v6
         with:
           version: latest
+          install-mode: goinstall
           working-directory: proto
 
       - name: golangci-lint (sync-gateway)
         uses: golangci/golangci-lint-action@v6
         with:
           version: latest
+          install-mode: goinstall
           working-directory: services/sync-gateway
 
       - name: golangci-lint (capture-api)
         uses: golangci/golangci-lint-action@v6
         with:
           version: latest
+          install-mode: goinstall
           working-directory: services/capture-api
 
       - name: golangci-lint (redaction-audit)
         uses: golangci/golangci-lint-action@v6
         with:
           version: latest
+          install-mode: goinstall
           working-directory: services/redaction-audit
 
   go-test:
@@ -244,5 +249,5 @@ jobs:
 
       - uses: bufbuild/buf-action@v1
         with:
-          working_directory: proto
+          input: proto
           pr_comment: false

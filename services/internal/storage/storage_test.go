@@ -2,6 +2,9 @@ package storage
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -135,6 +138,64 @@ func TestClient_HashObject_Validation(t *testing.T) {
 	}
 	if _, err := c.HashObject(context.Background(), "captures/evidence.mp4"); err == nil {
 		t.Fatal("expected error from unreachable server")
+	}
+
+	// An object name over 1024 bytes fails minio-go's client-side name
+	// validation synchronously, inside GetObject itself, before any network
+	// round trip — exercises the "get %q" wrapped-error branch specifically
+	// (the unreachable-server cases above surface their error later, from
+	// the io.Copy read, per GetObject's lazy-read design).
+	if _, err := c.HashObject(context.Background(), strings.Repeat("a", 1025)); err == nil {
+		t.Fatal("expected error for object name over 1024 characters")
+	}
+}
+
+// fakeS3Server returns an httptest server that answers HEAD /bucket with
+// headStatus and any other request (MakeBucket's bucket-creating PUT, or
+// SetBucketEncryption's PUT ?encryption) with otherStatus — enough to drive
+// EnsureHardenedBucket down a specific error branch without a real MinIO.
+func fakeS3Server(t *testing.T, headStatus, otherStatus int) *Client {
+	t.Helper()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			w.WriteHeader(headStatus)
+			return
+		}
+		w.WriteHeader(otherStatus)
+	}))
+	t.Cleanup(srv.Close)
+
+	mc, err := minio.New(strings.TrimPrefix(srv.URL, "http://"), &minio.Options{
+		Creds:  credentials.NewStaticV4("x", "y", ""),
+		Secure: false,
+		Region: "us-east-1",
+	})
+	if err != nil {
+		t.Fatalf("new minio client: %v", err)
+	}
+	c, err := New(mc, "bucket")
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	return c
+}
+
+func TestClient_EnsureHardenedBucket_MakeBucketError(t *testing.T) {
+	// HEAD reports the bucket absent (404), so EnsureHardenedBucket takes
+	// the MakeBucket branch; MakeBucket itself is made to fail (500).
+	c := fakeS3Server(t, http.StatusNotFound, http.StatusInternalServerError)
+	if err := c.EnsureHardenedBucket(context.Background()); err == nil {
+		t.Fatal("expected error from failing MakeBucket")
+	}
+}
+
+func TestClient_EnsureHardenedBucket_SetBucketEncryptionError(t *testing.T) {
+	// HEAD reports the bucket present (200), so MakeBucket is skipped
+	// entirely; SetBucketEncryption's PUT is made to fail (500).
+	c := fakeS3Server(t, http.StatusOK, http.StatusInternalServerError)
+	if err := c.EnsureHardenedBucket(context.Background()); err == nil {
+		t.Fatal("expected error from failing SetBucketEncryption")
 	}
 }
 

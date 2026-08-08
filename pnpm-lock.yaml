@@ -29,6 +29,9 @@ importers:
       eslint:
         specifier: ^9.19.0
         version: 9.39.5(supports-color@7.2.0)
+      fake-indexeddb:
+        specifier: ^6.2.5
+        version: 6.2.5
       tesseract.js:
         specifier: ^7.0.0
         version: 7.0.0

@@ -55,6 +55,35 @@ func TestNewAttempt(t *testing.T) {
 	}
 }
 
+func TestNewAttempt_RandError(t *testing.T) {
+	// The real crypto/rand reader does not fail in practice; substitute a
+	// failing one via the randRead seam to exercise randToken's error-return
+	// branch, and each of NewAttempt's three call sites in turn (state,
+	// nonce, verifier) — a failure on the Nth call only.
+	errBoom := errors.New("rand boom")
+	original := randRead
+	t.Cleanup(func() { randRead = original })
+
+	randRead = func([]byte) (int, error) { return 0, errBoom }
+	if _, err := randToken(16); !errors.Is(err, errBoom) {
+		t.Fatalf("randToken: want %v, got %v", errBoom, err)
+	}
+
+	for failOnCall := 1; failOnCall <= 3; failOnCall++ {
+		calls := 0
+		randRead = func(b []byte) (int, error) {
+			calls++
+			if calls == failOnCall {
+				return 0, errBoom
+			}
+			return original(b)
+		}
+		if _, err := NewAttempt(); !errors.Is(err, errBoom) {
+			t.Fatalf("NewAttempt failing on call %d: want %v, got %v", failOnCall, errBoom, err)
+		}
+	}
+}
+
 func TestBuildAuthURL(t *testing.T) {
 	idp := newFakeIdP(t)
 	cfg := newOAuth2Config(idp)

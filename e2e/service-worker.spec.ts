@@ -1,3 +1,4 @@
+import 'fake-indexeddb/auto';
 import { expect, test, type CDPSession } from '@playwright/test';
 import { createServiceWorker } from '../clients/extension/src/background/service-worker.js';
 import type {

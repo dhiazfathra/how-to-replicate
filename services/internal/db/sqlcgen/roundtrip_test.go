@@ -9,6 +9,7 @@ package sqlcgen
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -557,6 +558,109 @@ func TestListCaptureEventsByCapture_RowsErr(t *testing.T) {
 	q := New(&fakeDBTX{rows: &fakeRows{rowsErr: errRowsBoom}})
 	if _, err := q.ListCaptureEventsByCapture(context.Background(), "cap_x"); !errors.Is(err, errRowsBoom) {
 		t.Fatalf("expected rows.Err() error, got %v", err)
+	}
+}
+
+func TestQueries_UpdateWorkspace_RoundTrip(t *testing.T) {
+	ctx := context.Background()
+	dsns := migratedPostgres(t, ctx)
+
+	pool := mustConnect(t, ctx, dsns.migration)
+	q := New(pool)
+	s := seedFixtures(t, ctx, q)
+
+	updated, err := q.UpdateWorkspace(ctx, UpdateWorkspaceParams{ID: s.workspaceID, Name: "Acme Renamed"})
+	if err != nil || updated.Name != "Acme Renamed" {
+		t.Fatalf("UpdateWorkspace: %v, %+v", err, updated)
+	}
+}
+
+func TestQueries_UpdateWorkspacePolicyOverrides_RoundTrip(t *testing.T) {
+	ctx := context.Background()
+	dsns := migratedPostgres(t, ctx)
+
+	pool := mustConnect(t, ctx, dsns.migration)
+	q := New(pool)
+	s := seedFixtures(t, ctx, q)
+
+	updated, err := q.UpdateWorkspacePolicyOverrides(ctx, UpdateWorkspacePolicyOverridesParams{
+		ID: s.workspaceID, PolicyOverrides: []byte(`{"retention_days":30}`),
+	})
+	if err != nil {
+		t.Fatalf("UpdateWorkspacePolicyOverrides: %v, %+v", err, updated)
+	}
+	// jsonb round-trips through Postgres's own (re-whitespaced) formatting,
+	// not byte-for-byte — assert on the decoded value instead.
+	var got struct {
+		RetentionDays int `json:"retention_days"`
+	}
+	if err := json.Unmarshal(updated.PolicyOverrides, &got); err != nil || got.RetentionDays != 30 {
+		t.Fatalf("UpdateWorkspacePolicyOverrides: unmarshal %v, got %+v", err, got)
+	}
+}
+
+func TestQueries_UpdateProjectForWorkspace_RoundTrip(t *testing.T) {
+	ctx := context.Background()
+	dsns := migratedPostgres(t, ctx)
+
+	pool := mustConnect(t, ctx, dsns.migration)
+	q := New(pool)
+	s := seedFixtures(t, ctx, q)
+
+	updated, err := q.UpdateProjectForWorkspace(ctx, UpdateProjectForWorkspaceParams{
+		ID: s.projectID, WorkspaceID: s.workspaceID, Name: "Mobile",
+	})
+	if err != nil || updated.Name != "Mobile" {
+		t.Fatalf("UpdateProjectForWorkspace: %v, %+v", err, updated)
+	}
+	// Wrong workspace looks identical to no such project.
+	if _, err := q.UpdateProjectForWorkspace(ctx, UpdateProjectForWorkspaceParams{
+		ID: s.projectID, WorkspaceID: "some_other_workspace", Name: "Nope",
+	}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("UpdateProjectForWorkspace wrong workspace: want ErrNoRows, got %v", err)
+	}
+}
+
+func TestQueries_UpsertUser_RoundTrip(t *testing.T) {
+	ctx := context.Background()
+	dsns := migratedPostgres(t, ctx)
+
+	pool := mustConnect(t, ctx, dsns.migration)
+	q := New(pool)
+
+	created, err := q.UpsertUser(ctx, UpsertUserParams{ID: "user_upsert", Email: "b@example.com", Name: "Bea"})
+	if err != nil || created.Name != "Bea" {
+		t.Fatalf("UpsertUser (insert): %v, %+v", err, created)
+	}
+	// Replaying the same IdP subject updates in place rather than erroring.
+	updated, err := q.UpsertUser(ctx, UpsertUserParams{ID: "user_upsert", Email: "b@example.com", Name: "Bea Renamed"})
+	if err != nil || updated.Name != "Bea Renamed" || updated.ID != created.ID {
+		t.Fatalf("UpsertUser (update): %v, %+v", err, updated)
+	}
+}
+
+func TestQueries_UpsertAssetForUpload_RoundTrip(t *testing.T) {
+	ctx := context.Background()
+	dsns := migratedPostgres(t, ctx)
+
+	pool := mustConnect(t, ctx, dsns.migration)
+	q := New(pool)
+	s := seedFixtures(t, ctx, q)
+
+	created, err := q.UpsertAssetForUpload(ctx, UpsertAssetForUploadParams{
+		ID: "asset_upload", CaptureID: s.captureID, Kind: "video", MimeType: "video/webm",
+		SizeBytes: 2048, ObjectKey: "captures/cap_1/upload-video",
+	})
+	if err != nil || created.ObjectKey != "captures/cap_1/upload-video" || created.ChunkCount != 0 {
+		t.Fatalf("UpsertAssetForUpload (insert): %v, %+v", err, created)
+	}
+	// Re-presigning the same asset id updates the object key in place.
+	updated, err := q.UpsertAssetForUpload(ctx, UpsertAssetForUploadParams{
+		ID: "asset_upload", CaptureID: s.captureID, Kind: "video", MimeType: "video/webm",
+		SizeBytes: 2048, ObjectKey: "captures/cap_1/upload-video-v2",
+	})
+	if err != nil || updated.ObjectKey != "captures/cap_1/upload-video-v2" {
+		t.Fatalf("UpsertAssetForUpload (update): %v, %+v", err, updated)
 	}
 }
 
