@@ -9,10 +9,19 @@ The recording is the input. The document is the product.
 
 ## Status
 
-**Phase 0 implemented.** The MV3 extension, the viewer, the no-login Recording Link,
-and the three shared packages are built and tested — 616 unit tests plus an
-end-to-end suite that drives a real Chromium, loads the real extension, and asserts
-the resulting document. No server, per [ADR-002](docs/decisions/ADR-002-client-only-phase-0.md).
+**Phases 0 and 1 implemented.** Phase 0's MV3 extension, viewer, no-login Recording
+Link, and shared packages are built and tested — 743 unit tests plus an end-to-end
+suite that drives a real Chromium, loads the real extension, and asserts the resulting
+document. Phase 1 has now landed on top: the Go services
+([`services/`](services)) — `sync-gateway`, `capture-api`, and `redaction-audit`, over
+shared `services/internal` packages — exist and run; the client sync engine, SSO/RBAC
+with workspaces and projects, no-login share links, retention windows with durable
+hard-delete, Slack routing, and the embeddable JS SDK all shipped.
+
+Phase 0's "no server" was an [ADR-002](docs/decisions/ADR-002-client-only-phase-0.md)
+constraint *on Phase 0 specifically* — Phase 1 stands up our own services, but the
+local-first contract ([ADR-001](docs/decisions/ADR-001-local-first-architecture.md))
+holds: those services are a sync target, never the thing the UI reads from.
 
 - [Design spec](docs/superpowers/specs/2026-08-04-how-to-replicate-design.md) — all four phases
 - [Architecture Decision Records](docs/decisions/README.md) — 14 ADRs, with rejected alternatives
@@ -124,7 +133,7 @@ pnpm exec playwright install --with-deps chromium
 | Command | What it does |
 |---|---|
 | `pnpm build` | Builds all three clients into their `dist/` folders |
-| `pnpm test` | Unit tests (670, Vitest, incl. a `fast-check` property suite for sync convergence) |
+| `pnpm test` | Unit tests (743, Vitest, incl. a `fast-check` property suite for sync convergence) |
 | `pnpm test:coverage` | Unit tests with coverage thresholds enforced |
 | `pnpm e2e` | Builds, then runs the Playwright end-to-end suite in real Chromium |
 | `pnpm e2e:report` | Opens the HTML report from the last e2e run |
@@ -450,6 +459,27 @@ Invariant 5 still binds here: nothing under `sync/` imports from `clients/`.
 pnpm --filter @htr/capture-core test -- src/sync   # queue/mutations/engine/transport, 40+ cases
 ```
 
+### Local storage LRU eviction (Task 9)
+
+`packages/capture-core/src/storage/eviction.ts` upgrades the Phase 0 refuse-to-record
+gate (ADR-009, invariant 8): at the storage budget, instead of always refusing, the
+extension now first tries to reclaim room by evicting the **least-recently-pushed
+capture whose manifest is fully synced server-side** (`sync.manifestComplete === true`).
+`isEvictable` consults `manifestComplete`, never `lastPushedAt` — a capture can push
+metadata repeatedly while its video is still uploading, so a push timestamp is not a
+completion signal; `lastPushedAt` is used only for LRU ordering *among* already-eligible
+captures. If nothing qualifies (including when sync isn't configured at all), eviction
+is a no-op and the caller falls through to the existing export-or-delete prompt —
+eviction never substitutes for that refusal, and un-synced data is never the only copy
+deleted. `checkBudget`/`selectEvictionCandidate`/`runEviction` are pure; the extension
+wires them in `clients/extension/src/background/service-worker.ts`'s `ensureBudget`,
+which `start()` calls before minting a capture (`runEviction` on a failed
+`checkBudget`, then retry).
+
+```bash
+pnpm --filter @htr/capture-core test -- src/storage   # budget + eviction eligibility/LRU
+```
+
 ### Identity — OIDC, workspaces/projects, RBAC (Task 10)
 
 Task 10 replaces the client-trusted header seam (`X-Htr-Workspace-Id` /
@@ -520,6 +550,110 @@ Environment variables (sync-gateway and capture-api, production):
 go test ./services/internal/auth/...   # state/nonce/replay/JWKS-rotation
 go test ./services/capture-api/...     # RBAC matrix, non-disclosing 404s, policy resolution
 pnpm --filter @htr/capture-core test -- src/store/identity-partition   # partition/purge ordering
+```
+
+### capture-api reads, comments, share links (Task 11)
+
+`services/capture-api/internal/api` adds the authenticated read surface — `GetCapture`,
+`ListCaptures`, `ListEvents`, and `createComment` — plus the no-login share-link resolver.
+These are not the local-first UI's normal read path; they exist for a share-link viewer's
+server-side resolution and for a client whose local copy was evicted (Task 9).
+
+- **The ready-gate is invariant 1.** Every path that can expose a capture builds its
+  response through the single `gateCapture`/`gateCaptureEvents` in
+  `internal/api/captureview.go`: a capture not in `state === 'ready'` returns status
+  metadata only — no doc, events, metadata, or env — and `omitempty` makes "withheld"
+  serialize byte-identically to "absent", so a client can't distinguish them. No read
+  path serializes a `sqlcgen.Capture` directly.
+- **Share links are revocation-ID tokens, not bare capture IDs.**
+  `internal/sharelink` mints `base64url(payload).base64url(HMAC-SHA256(payload))` where
+  the payload carries a random `shareLinkID` (stored on the `share_links` row), so
+  guessing a capture ID can't forge a token and two links to the same capture are
+  independently revocable. The `Signer` holds a current key plus rotated-out previous
+  keys tried only on verify, so rotation doesn't invalidate live tokens. `Verify` checks
+  signature/key/expiry only; revocation and capture state are re-read from the live rows
+  by the resolver (`internal/api/share.go`), never trusted from the token.
+- **Resolution is rate-limited and audited.** The one unauthenticated route
+  (`GET /v1/share/{token}`) is throttled per client IP by an in-process fixed-window
+  `sharelink.Limiter` (ADR-002's single-deployment posture — no Redis) so a token can't
+  be brute-forced, and every successful resolution writes exactly one `share_link.resolve`
+  `audit_log` row before returning content through the same `gateCapture`.
+
+```bash
+go test ./services/capture-api/internal/...   # ready-gate, token sign/verify/rotation, rate limit, audit
+```
+
+### Retention windows, hard delete, durable purge (Task 13)
+
+`services/capture-api/internal/purge` implements retention as a resumable, idempotent
+state machine (spec §12). `Sweep` finds every ready capture past its workspace's resolved
+retention window (`policy.Resolve` over the per-workspace override) and creates one
+`pending` `purge_jobs` row per capture — `CreatePurgeJobIfAbsent`'s `ON CONFLICT DO
+NOTHING` makes a repeat sweep a no-op, not a duplicate job.
+
+- **`Advance` drives one step:** `pending → tombstoned → blobs-deleting → blobs-deleted →
+  purged`. Tombstoning flips `capture.state = 'expired'` (so invariant 1's ready-gate now
+  rejects it) — the step that meets the compliance deadline. Blob deletion is idempotent
+  (a key already gone is success), and finalize clears the capture's disclosable content
+  columns without deleting the `captures` row outright.
+- **Resumable and crash-safe.** `Advance` assumes nothing about how a job reached its
+  state beyond what the row records, so `RunToCompletion` re-entered on a job read fresh
+  from the store resumes from wherever a crash left it; `Reconcile` re-drives every
+  not-yet-`purged` row without needing to know its state.
+- **Object storage can't enlist in a Postgres transaction**, so the two multi-row steps
+  (tombstone, finalize) run their `captures` + `purge_jobs` + `audit_log` writes as one
+  transaction via `internal/store`'s `TombstoneCaptureForPurge`/`FinalizePurgeForCapture`,
+  while blob deletes go through the `BlobStore` seam. `DetectOrphans` makes "no blob left
+  behind" verifiable: any bucket key referenced by neither a live asset row nor any purge
+  job is an orphan.
+
+```bash
+go test ./services/capture-api/internal/purge/...   # sweep idempotency, resume-from-any-state, orphan detection
+```
+
+### redaction-audit alarm service (Task 12)
+
+`services/redaction-audit` is the server-side redaction **alarm** (spec §11), a
+background poll loop with no HTTP surface. Periodically it re-runs the *current* ruleset
+over every `ready` capture and, on a match, writes an append-only
+`redaction_audit_findings` row, an `audit_log` row, and pages Security through an
+`audit.Sink` (a `WebhookSink` by default).
+
+- **Read-only ALARM, never a filter (invariant 7).** It never mutates, masks, or
+  quarantines a capture, event, or asset — treating it as a filter would hide exactly the
+  signal it exists to raise. `internal/audit/service_readonly_test.go` proves this against
+  real Postgres by hashing every captures/capture_events row before and after a run that
+  finds a genuine seeded leak.
+- **Ruleset-version pairing.** Every finding carries both `applied_ruleset_version` (what
+  the client redacted with) and `evaluation_ruleset_version` (what this run evaluated
+  against), so a finding raised after Security ships a new pattern is distinguishable from
+  a genuine client-side redaction hole, and re-running against the same versions
+  reproduces the same finding.
+- **Conformance, not assertion.** `internal/redact` is a detection-only Go port of
+  `packages/capture-core/src/redaction`'s rule semantics, and `conformance_test.go` runs
+  it against `testdata/corpus.json` — a generated export of the *same* golden synthetic-PHI
+  corpus the TS engine runs — asserting both engines detect the same rule IDs on every
+  fixture. Regenerate with `pnpm export:audit-corpus`; CI fails on drift. (Pattern
+  matching uses `dlclark/regexp2` because the `phone-id` pattern needs a lookbehind RE2
+  can't express.)
+
+```bash
+go test ./services/redaction-audit/...   # Go/TS conformance, read-only proof, version-pairing
+```
+
+### Slack routing (Task 14)
+
+`packages/trackers/src/slack.ts` adds a Slack `TrackerProvider` alongside the Phase 0
+GitHub/GitLab providers. It reuses gitlab.ts's PKCE (RFC 7636) helpers verbatim — no
+`client_secret` anywhere: `code_challenge` goes to `/oauth/v2/authorize`, the raw
+`code_verifier` goes once to the token exchange. `createIssue` re-splits `router.ts`'s
+flattened body back into Slack block-kit structure (rather than changing the shared
+`IssueInput` shape), posts via `chat.postMessage`, and attaches a video inline or as a
+signed download link past a size threshold. `resolveSlackBinding` picks the
+per-project binding from `integration_bindings` rows, keeping routing per-project.
+
+```bash
+pnpm --filter @htr/trackers test -- src/slack   # PKCE auth, block-kit build, binding resolution
 ```
 
 ## Running the extension
