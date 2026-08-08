@@ -67,6 +67,21 @@ message PullDeltasResponse {
   repeated Mutation mutations = 1;
   int64 revision = 2;
   bool has_more = 3;
+  // captures carries the current server-side sync state — manifest
+  // completeness and revision — for every capture that has at least one
+  // mutation in this page. It is the only channel by which
+  // manifest_complete (set server-side once every asset in a capture's
+  // manifest is verified, see CompleteAssetUploadResponse) reaches the
+  // client; eviction (packages/capture-core/src/storage/eviction.ts) reads
+  // it via capture.sync.manifestComplete.
+  repeated CaptureSyncState captures = 4;
+}
+
+// CaptureSyncState is one capture's server-side sync state as of this pull.
+message CaptureSyncState {
+  string capture_id = 1;
+  bool manifest_complete = 2;
+  int64 revision = 3;
 }
 
 message RequestAssetUploadRequest {

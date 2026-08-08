@@ -45,6 +45,7 @@ type fakeStore struct {
 	markVerifiedErr     error
 	manifestCompleteErr error
 	setManifestErr      error
+	getManifestStateErr error
 }
 
 type insertedComment struct {

@@ -107,7 +107,7 @@ func TestPullDeltas_RoundTripsEveryOpKind(t *testing.T) {
 		t.Fatalf("PushMutations: %v", err)
 	}
 
-	got, revision, hasMore, err := gw.PullDeltas(ctx, workspaceA, 0, 0)
+	got, revision, hasMore, _, err := gw.PullDeltas(ctx, workspaceA, 0, 0)
 	if err != nil {
 		t.Fatalf("PullDeltas: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestPullDeltas_SinceExcludesAlreadySeen(t *testing.T) {
 		}
 	}
 
-	got, revision, _, err := gw.PullDeltas(ctx, workspaceA, 1, 0)
+	got, revision, _, _, err := gw.PullDeltas(ctx, workspaceA, 1, 0)
 	if err != nil {
 		t.Fatalf("PullDeltas: %v", err)
 	}
@@ -170,7 +170,7 @@ func TestPullDeltas_SinceExcludesAlreadySeen(t *testing.T) {
 		t.Fatalf("want revision 3, got %d", revision)
 	}
 
-	if got, _, _, err := gw.PullDeltas(ctx, workspaceA, 3, 0); err != nil || len(got) != 0 {
+	if got, _, _, _, err := gw.PullDeltas(ctx, workspaceA, 3, 0); err != nil || len(got) != 0 {
 		t.Fatalf("want empty pull at head, got %+v err=%v", got, err)
 	}
 }
@@ -196,7 +196,7 @@ func TestPullDeltas_WorkspaceIsolation(t *testing.T) {
 	push(workspaceB, "cap_b", "b1")
 	push(workspaceA, "cap_a", "a2")
 
-	got, _, _, err := gw.PullDeltas(ctx, workspaceA, 0, 0)
+	got, _, _, _, err := gw.PullDeltas(ctx, workspaceA, 0, 0)
 	if err != nil {
 		t.Fatalf("PullDeltas: %v", err)
 	}
@@ -228,7 +228,7 @@ func TestPullDeltas_Pagination(t *testing.T) {
 		if pages > total {
 			t.Fatalf("pagination did not terminate")
 		}
-		muts, revision, hasMore, err := gw.PullDeltas(ctx, workspaceA, since, 3)
+		muts, revision, hasMore, _, err := gw.PullDeltas(ctx, workspaceA, since, 3)
 		if err != nil {
 			t.Fatalf("PullDeltas: %v", err)
 		}
@@ -252,7 +252,7 @@ func TestPullDeltas_StoreError(t *testing.T) {
 	store.pullErr = errors.New("boom")
 	gw := newGateway(store, time.Unix(0, 0))
 
-	if _, _, _, err := gw.PullDeltas(context.Background(), workspaceA, 0, 0); err == nil {
+	if _, _, _, _, err := gw.PullDeltas(context.Background(), workspaceA, 0, 0); err == nil {
 		t.Fatalf("want error, got nil")
 	}
 }
@@ -266,8 +266,75 @@ func TestPullDeltas_DecodeErrorSurfaces(t *testing.T) {
 	store.deltaLogWorkspace = append(store.deltaLogWorkspace, workspaceA)
 	gw := newGateway(store, time.Unix(0, 0))
 
-	if _, _, _, err := gw.PullDeltas(context.Background(), workspaceA, 0, 0); err == nil {
+	if _, _, _, _, err := gw.PullDeltas(context.Background(), workspaceA, 0, 0); err == nil {
 		t.Fatalf("want error for an undecodable delta row, got nil")
+	}
+}
+
+// TestPullDeltas_CaptureSyncState proves PullDeltas surfaces one
+// CaptureSyncState per distinct capture touched in the page — the only
+// channel manifest_complete has to reach the client — deduped when
+// multiple mutations in the page hit the same capture.
+func TestPullDeltas_CaptureSyncState(t *testing.T) {
+	store := newFakeStore()
+	seedCapture(store, workspaceA)
+	store.manifestComplete[captureID] = true
+	gw := newGateway(store, time.Unix(0, 0))
+	ctx := context.Background()
+
+	muts := []*syncv1.Mutation{setTitleMutation("m1", "a"), summaryMutation("m2", "b")}
+	if _, err := gw.PushMutations(ctx, workspaceA, "actor", muts); err != nil {
+		t.Fatalf("PushMutations: %v", err)
+	}
+
+	_, revision, _, captures, err := gw.PullDeltas(ctx, workspaceA, 0, 0)
+	if err != nil {
+		t.Fatalf("PullDeltas: %v", err)
+	}
+	if len(captures) != 1 {
+		t.Fatalf("want one deduped CaptureSyncState for %d mutations on the same capture, got %+v", len(muts), captures)
+	}
+	cs := captures[0]
+	if cs.GetCaptureId() != captureID || !cs.GetManifestComplete() || cs.GetRevision() != revision {
+		t.Fatalf("want {%s true %d}, got %+v", captureID, revision, cs)
+	}
+}
+
+// TestPullDeltas_CaptureSyncStateStoreError proves an infra failure from
+// GetCaptureManifestState surfaces as an error, same as any other Store
+// failure in this path.
+func TestPullDeltas_CaptureSyncStateStoreError(t *testing.T) {
+	store := newFakeStore()
+	seedCapture(store, workspaceA)
+	store.getManifestStateErr = errors.New("boom")
+	gw := newGateway(store, time.Unix(0, 0))
+	ctx := context.Background()
+
+	if _, err := gw.PushMutations(ctx, workspaceA, "actor", []*syncv1.Mutation{setTitleMutation("m1", "a")}); err != nil {
+		t.Fatalf("PushMutations: %v", err)
+	}
+
+	if _, _, _, _, err := gw.PullDeltas(ctx, workspaceA, 0, 0); err == nil {
+		t.Fatalf("want error, got nil")
+	}
+}
+
+// TestPullDeltas_CaptureSyncStateNotFound proves a delta row referencing a
+// capture the store no longer has (e.g. purged between the mutation being
+// recorded and this pull) is silently omitted from captures rather than
+// causing the whole pull to fail.
+func TestPullDeltas_CaptureSyncStateNotFound(t *testing.T) {
+	store := newFakeStore()
+	store.deltaLog = append(store.deltaLog, DeltaMutation{Seq: 1, ID: "m1", CaptureID: "cap_gone", Op: "set_title", Payload: []byte(`"a"`)})
+	store.deltaLogWorkspace = append(store.deltaLogWorkspace, workspaceA)
+	gw := newGateway(store, time.Unix(0, 0))
+
+	_, _, _, captures, err := gw.PullDeltas(context.Background(), workspaceA, 0, 0)
+	if err != nil {
+		t.Fatalf("PullDeltas: %v", err)
+	}
+	if len(captures) != 0 {
+		t.Fatalf("want no CaptureSyncState for a capture the store doesn't have, got %+v", captures)
 	}
 }
 

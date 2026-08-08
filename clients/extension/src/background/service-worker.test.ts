@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { describe, expect, it, vi } from 'vitest';
-import { openCaptureDb, CaptureRepository } from '@htr/capture-core';
+import { openCaptureDb, CaptureRepository, type Capture } from '@htr/capture-core';
 import { encodeChunk } from '../lib/chunk-codec.js';
 import { createServiceWorker, wireServiceWorker } from './service-worker.js';
 import { MANAGED_RULESET_KEY } from './ruleset-store.js';
@@ -136,6 +136,98 @@ describe('createServiceWorker', () => {
     expect(chromeApi.debugger.attach).toHaveBeenCalledWith(target, '1.3');
     expect(active!.capture.state).toBe('recording');
     expect(active!.capture.fidelity).toBe('full');
+  });
+
+  it('refuses to start a capture when over budget and nothing is evictable', async () => {
+    const chromeApi = fakeAdapter({ [MANAGED_RULESET_KEY]: allowedRuleset });
+    const overQuota = vi.fn().mockResolvedValue({ usage: Number.MAX_SAFE_INTEGER, quota: Number.MAX_SAFE_INTEGER });
+    const worker = createServiceWorker(chromeApi, overQuota);
+    await worker.rulesetStore.load();
+
+    const active = await worker.start('https://allowed.test', target);
+
+    expect(active).toBeNull();
+    expect(chromeApi.debugger.attach).not.toHaveBeenCalled();
+    expect(overQuota).toHaveBeenCalled();
+  });
+
+  it('evicts the LRU fully-synced capture and proceeds when over budget but something is evictable', async () => {
+    const db = await openCaptureDb();
+    const repo = new CaptureRepository(db);
+    const evictableId = `evictable-${Date.now()}`;
+    const evictable: Capture = {
+      id: evictableId,
+      workspaceId: null,
+      projectId: null,
+      source: 'extension',
+      state: 'ready',
+      fidelity: 'full',
+      createdAt: '2020-01-01T00:00:00.000Z',
+      epoch: 0,
+      env: {
+        userAgent: 'test-agent',
+        platform: 'test',
+        viewport: { w: 100, h: 100 },
+        devicePixelRatio: 1,
+        locale: 'en-US',
+        timezone: 'UTC',
+        url: 'https://example.com',
+      },
+      metadata: {},
+      doc: null,
+      assets: [],
+      withheldEventCount: 0,
+      sync: { revision: 1, lastPushedAt: '2020-01-01T00:00:00.000Z', manifestComplete: true, dirtyFields: [] },
+    };
+    await repo.putCapture(evictable);
+
+    const chromeApi = fakeAdapter({ [MANAGED_RULESET_KEY]: allowedRuleset });
+    const overQuota = vi.fn().mockResolvedValue({ usage: Number.MAX_SAFE_INTEGER, quota: Number.MAX_SAFE_INTEGER });
+    const worker = createServiceWorker(chromeApi, overQuota);
+    await worker.rulesetStore.load();
+
+    const active = await worker.start('https://allowed.test', target);
+
+    expect(active).not.toBeNull();
+    const evicted = await repo.getCapture(evictableId);
+    expect(evicted?.localAssets).toBe(false);
+  });
+
+  it('uses navigator.storage.estimate for the default budget check when no estimateStorage override is given', async () => {
+    // An empty StorageEstimate (usage/quota both omitted, as some browsers
+    // report before any usage has been recorded) must fall back to 0/Infinity
+    // rather than leaving `undefined` to flow into checkBudget's comparisons.
+    const estimate = vi.fn().mockResolvedValue({});
+    vi.stubGlobal('navigator', { storage: { estimate } });
+    try {
+      const chromeApi = fakeAdapter({ [MANAGED_RULESET_KEY]: allowedRuleset });
+      const worker = createServiceWorker(chromeApi);
+      await worker.rulesetStore.load();
+
+      const active = await worker.start('https://allowed.test', target);
+
+      expect(estimate).toHaveBeenCalled();
+      expect(active).not.toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('reads usage/quota straight from navigator.storage.estimate when both are reported', async () => {
+    const estimate = vi.fn().mockResolvedValue({ usage: 10, quota: 1000 });
+    vi.stubGlobal('navigator', { storage: { estimate } });
+    try {
+      const chromeApi = fakeAdapter({ [MANAGED_RULESET_KEY]: allowedRuleset });
+      const worker = createServiceWorker(chromeApi);
+      await worker.rulesetStore.load();
+
+      const active = await worker.start('https://allowed.test', target);
+
+      expect(estimate).toHaveBeenCalled();
+      expect(active).not.toBeNull();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('ingests mapped CDP events into the Instant Replay buffer', async () => {

@@ -222,7 +222,7 @@ func TestPgStore_PullDeltas_Integration(t *testing.T) {
 		t.Fatalf("PushMutations: %v", err)
 	}
 
-	all, revision, hasMore, err := gw.PullDeltas(ctx, workspaceID, 0, 0)
+	all, revision, hasMore, captures, err := gw.PullDeltas(ctx, workspaceID, 0, 0)
 	if err != nil {
 		t.Fatalf("PullDeltas: %v", err)
 	}
@@ -235,10 +235,22 @@ func TestPgStore_PullDeltas_Integration(t *testing.T) {
 	if all[2].GetAppendComment().GetCommentId() != "pdc1" || all[2].GetAppendComment().GetBody() != "third" {
 		t.Fatalf("append_comment did not round-trip through Postgres: %+v", all[2])
 	}
+	// One CaptureSyncState for cap_int, sourced from the real captures row
+	// — manifest_complete false (no assets uploaded in this test) and
+	// revision matching the cursor PullDeltas itself returned.
+	if len(captures) != 1 || captures[0].GetCaptureId() != "cap_int" {
+		t.Fatalf("want one CaptureSyncState for cap_int, got %+v", captures)
+	}
+	if captures[0].GetManifestComplete() {
+		t.Fatalf("want manifest_complete=false against real Postgres, got true")
+	}
+	if captures[0].GetRevision() != revision {
+		t.Fatalf("want CaptureSyncState revision %d to match PullDeltas cursor, got %d", revision, captures[0].GetRevision())
+	}
 
 	// since= the last-seen revision must exclude everything already seen —
 	// the core "delta not snapshot" behavior, now against a real cursor.
-	empty, _, _, err := gw.PullDeltas(ctx, workspaceID, revision, 0)
+	empty, _, _, _, err := gw.PullDeltas(ctx, workspaceID, revision, 0)
 	if err != nil {
 		t.Fatalf("PullDeltas at head: %v", err)
 	}
@@ -248,14 +260,14 @@ func TestPgStore_PullDeltas_Integration(t *testing.T) {
 
 	// A page size smaller than the total sets has_more and stops exactly at
 	// the boundary.
-	page, pageRevision, pageHasMore, err := gw.PullDeltas(ctx, workspaceID, 0, 2)
+	page, pageRevision, pageHasMore, _, err := gw.PullDeltas(ctx, workspaceID, 0, 2)
 	if err != nil {
 		t.Fatalf("PullDeltas paged: %v", err)
 	}
 	if !pageHasMore || len(page) != 2 || page[1].GetId() != "pd2" {
 		t.Fatalf("want a 2-row page with hasMore=true, got page=%+v hasMore=%v", page, pageHasMore)
 	}
-	rest, _, restHasMore, err := gw.PullDeltas(ctx, workspaceID, pageRevision, 2)
+	rest, _, restHasMore, _, err := gw.PullDeltas(ctx, workspaceID, pageRevision, 2)
 	if err != nil {
 		t.Fatalf("PullDeltas rest of page: %v", err)
 	}
@@ -268,7 +280,7 @@ func TestPgStore_PullDeltas_Integration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("seed other workspace: %v", err)
 	}
-	isolated, _, _, err := gw.PullDeltas(ctx, otherWorkspace.ID, 0, 0)
+	isolated, _, _, _, err := gw.PullDeltas(ctx, otherWorkspace.ID, 0, 0)
 	if err != nil {
 		t.Fatalf("PullDeltas other workspace: %v", err)
 	}
@@ -514,5 +526,36 @@ func TestPgStore_Assets_Integration(t *testing.T) {
 	}
 	if !capture.ManifestComplete {
 		t.Fatalf("want manifest_complete persisted true")
+	}
+}
+
+// TestPgStore_GetCaptureManifestState_Integration proves pgStore's
+// GetCaptureManifestState against real Postgres: the found path returns the
+// real manifest_complete/revision columns, and an unknown capture ID
+// reports found=false rather than an error (same no-existence-leak shape
+// as LockCaptureForWorkspace).
+func TestPgStore_GetCaptureManifestState_Integration(t *testing.T) {
+	ctx := context.Background()
+	pool, _ := setupRuntimePool(t, ctx)
+	store := &pgStore{q: sqlcgen.New(pool)}
+
+	if err := store.SetCaptureManifestComplete(ctx, "cap_int", true); err != nil {
+		t.Fatalf("set manifest complete: %v", err)
+	}
+
+	complete, _, found, err := store.GetCaptureManifestState(ctx, "cap_int")
+	if err != nil {
+		t.Fatalf("GetCaptureManifestState: %v", err)
+	}
+	if !found || !complete {
+		t.Fatalf("want found=true complete=true, got found=%v complete=%v", found, complete)
+	}
+
+	_, _, found, err = store.GetCaptureManifestState(ctx, "cap_does_not_exist")
+	if err != nil {
+		t.Fatalf("GetCaptureManifestState for unknown capture: %v", err)
+	}
+	if found {
+		t.Fatalf("want found=false for an unknown capture id")
 	}
 }

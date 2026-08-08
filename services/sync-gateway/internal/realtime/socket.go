@@ -20,7 +20,7 @@ import (
 // exists so tests can drive the handler against a fake without a database,
 // and so this package never has to know about gateway.Store.
 type DeltaPuller interface {
-	PullDeltas(ctx context.Context, workspaceID string, since int64, limit int32) (mutations []*syncv1.Mutation, revision int64, hasMore bool, err error)
+	PullDeltas(ctx context.Context, workspaceID string, since int64, limit int32) (mutations []*syncv1.Mutation, revision int64, hasMore bool, captures []*syncv1.CaptureSyncState, err error)
 }
 
 // deltaBatch is the wire shape sent over the socket: each mutation is
@@ -131,7 +131,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		mutations, revision, _, err := h.Gateway.PullDeltas(ctx, workspaceID, since, h.PageSize)
+		mutations, revision, _, _, err := h.Gateway.PullDeltas(ctx, workspaceID, since, h.PageSize)
 		if err != nil {
 			h.logger().Error("realtime: pull deltas", "error", err, "workspace_id", workspaceID)
 			_ = conn.Close(websocket.StatusInternalError, "pull failed")

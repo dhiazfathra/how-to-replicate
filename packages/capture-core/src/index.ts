@@ -12,6 +12,7 @@ export * from './storage/schema.js';
 export * from './storage/db.js';
 export * from './storage/repository.js';
 export * from './storage/budget.js';
+export * from './storage/eviction.js';
 export * from './store/observable.js';
 export * from './store/capture-store.js';
 export * from './store/identity-partition.js';

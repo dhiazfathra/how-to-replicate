@@ -102,6 +102,13 @@ type Store interface {
 	// flag — the field client eviction reads (invariant 8), never
 	// lastPushedAt.
 	SetCaptureManifestComplete(ctx context.Context, captureID string, complete bool) error
+
+	// GetCaptureManifestState returns captureID's current manifest_complete
+	// flag and revision, or found=false if no capture with that ID exists.
+	// PullDeltas uses this to surface the capture-level sync state
+	// SetCaptureManifestComplete maintains — the only channel by which
+	// manifest_complete reaches the client.
+	GetCaptureManifestState(ctx context.Context, captureID string) (manifestComplete bool, revision int64, found bool, err error)
 }
 
 // DeltaMutation is one row of the delta log: a mutation as recorded in

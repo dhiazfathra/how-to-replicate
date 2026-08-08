@@ -254,6 +254,17 @@ func (s *pgStore) SetCaptureManifestComplete(ctx context.Context, captureID stri
 	return nil
 }
 
+func (s *pgStore) GetCaptureManifestState(ctx context.Context, captureID string) (bool, int64, bool, error) {
+	row, err := s.q.GetCapture(ctx, captureID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, 0, false, nil
+		}
+		return false, 0, false, fmt.Errorf("pgstore: get capture manifest state: %w", err)
+	}
+	return row.ManifestComplete, row.Revision, true, nil
+}
+
 func assetFromRow(row sqlcgen.Asset) Asset {
 	return Asset{
 		ID:         row.ID,

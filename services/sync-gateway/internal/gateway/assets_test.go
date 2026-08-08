@@ -108,6 +108,20 @@ func (f *fakeStore) SetCaptureManifestComplete(_ context.Context, captureID stri
 	return nil
 }
 
+// GetCaptureManifestState reads the flag SetCaptureManifestComplete wrote
+// (falling back to false if never set) plus the capture's revision, or
+// found=false if no such capture was seeded.
+func (f *fakeStore) GetCaptureManifestState(_ context.Context, captureID string) (bool, int64, bool, error) {
+	if f.getManifestStateErr != nil {
+		return false, 0, false, f.getManifestStateErr
+	}
+	c, ok := f.captures[captureID]
+	if !ok {
+		return false, 0, false, nil
+	}
+	return f.manifestComplete[captureID], c.Revision, true, nil
+}
+
 // --- fake ObjectStore --------------------------------------------------------
 
 type fakeObject struct {

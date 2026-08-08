@@ -612,10 +612,18 @@ func (x *PullDeltasRequest) GetSince() int64 {
 }
 
 type PullDeltasResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Mutations     []*Mutation            `protobuf:"bytes,1,rep,name=mutations,proto3" json:"mutations,omitempty"`
-	Revision      int64                  `protobuf:"varint,2,opt,name=revision,proto3" json:"revision,omitempty"`
-	HasMore       bool                   `protobuf:"varint,3,opt,name=has_more,json=hasMore,proto3" json:"has_more,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Mutations []*Mutation            `protobuf:"bytes,1,rep,name=mutations,proto3" json:"mutations,omitempty"`
+	Revision  int64                  `protobuf:"varint,2,opt,name=revision,proto3" json:"revision,omitempty"`
+	HasMore   bool                   `protobuf:"varint,3,opt,name=has_more,json=hasMore,proto3" json:"has_more,omitempty"`
+	// captures carries the current server-side sync state — manifest
+	// completeness and revision — for every capture that has at least one
+	// mutation in this page. It is the only channel by which
+	// manifest_complete (set server-side once every asset in a capture's
+	// manifest is verified, see CompleteAssetUploadResponse) reaches the
+	// client; eviction (packages/capture-core/src/storage/eviction.ts) reads
+	// it via capture.sync.manifestComplete.
+	Captures      []*CaptureSyncState `protobuf:"bytes,4,rep,name=captures,proto3" json:"captures,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -671,6 +679,74 @@ func (x *PullDeltasResponse) GetHasMore() bool {
 	return false
 }
 
+func (x *PullDeltasResponse) GetCaptures() []*CaptureSyncState {
+	if x != nil {
+		return x.Captures
+	}
+	return nil
+}
+
+// CaptureSyncState is one capture's server-side sync state as of this pull.
+type CaptureSyncState struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	CaptureId        string                 `protobuf:"bytes,1,opt,name=capture_id,json=captureId,proto3" json:"capture_id,omitempty"`
+	ManifestComplete bool                   `protobuf:"varint,2,opt,name=manifest_complete,json=manifestComplete,proto3" json:"manifest_complete,omitempty"`
+	Revision         int64                  `protobuf:"varint,3,opt,name=revision,proto3" json:"revision,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *CaptureSyncState) Reset() {
+	*x = CaptureSyncState{}
+	mi := &file_sync_v1_sync_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CaptureSyncState) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CaptureSyncState) ProtoMessage() {}
+
+func (x *CaptureSyncState) ProtoReflect() protoreflect.Message {
+	mi := &file_sync_v1_sync_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CaptureSyncState.ProtoReflect.Descriptor instead.
+func (*CaptureSyncState) Descriptor() ([]byte, []int) {
+	return file_sync_v1_sync_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *CaptureSyncState) GetCaptureId() string {
+	if x != nil {
+		return x.CaptureId
+	}
+	return ""
+}
+
+func (x *CaptureSyncState) GetManifestComplete() bool {
+	if x != nil {
+		return x.ManifestComplete
+	}
+	return false
+}
+
+func (x *CaptureSyncState) GetRevision() int64 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
 type RequestAssetUploadRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	CaptureId     string                 `protobuf:"bytes,1,opt,name=capture_id,json=captureId,proto3" json:"capture_id,omitempty"`
@@ -684,7 +760,7 @@ type RequestAssetUploadRequest struct {
 
 func (x *RequestAssetUploadRequest) Reset() {
 	*x = RequestAssetUploadRequest{}
-	mi := &file_sync_v1_sync_proto_msgTypes[11]
+	mi := &file_sync_v1_sync_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -696,7 +772,7 @@ func (x *RequestAssetUploadRequest) String() string {
 func (*RequestAssetUploadRequest) ProtoMessage() {}
 
 func (x *RequestAssetUploadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_sync_v1_sync_proto_msgTypes[11]
+	mi := &file_sync_v1_sync_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -709,7 +785,7 @@ func (x *RequestAssetUploadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RequestAssetUploadRequest.ProtoReflect.Descriptor instead.
 func (*RequestAssetUploadRequest) Descriptor() ([]byte, []int) {
-	return file_sync_v1_sync_proto_rawDescGZIP(), []int{11}
+	return file_sync_v1_sync_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *RequestAssetUploadRequest) GetCaptureId() string {
@@ -762,7 +838,7 @@ type RequestAssetUploadResponse struct {
 
 func (x *RequestAssetUploadResponse) Reset() {
 	*x = RequestAssetUploadResponse{}
-	mi := &file_sync_v1_sync_proto_msgTypes[12]
+	mi := &file_sync_v1_sync_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -774,7 +850,7 @@ func (x *RequestAssetUploadResponse) String() string {
 func (*RequestAssetUploadResponse) ProtoMessage() {}
 
 func (x *RequestAssetUploadResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_sync_v1_sync_proto_msgTypes[12]
+	mi := &file_sync_v1_sync_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -787,7 +863,7 @@ func (x *RequestAssetUploadResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RequestAssetUploadResponse.ProtoReflect.Descriptor instead.
 func (*RequestAssetUploadResponse) Descriptor() ([]byte, []int) {
-	return file_sync_v1_sync_proto_rawDescGZIP(), []int{12}
+	return file_sync_v1_sync_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *RequestAssetUploadResponse) GetUploadUrl() string {
@@ -829,7 +905,7 @@ type CompleteAssetUploadRequest struct {
 
 func (x *CompleteAssetUploadRequest) Reset() {
 	*x = CompleteAssetUploadRequest{}
-	mi := &file_sync_v1_sync_proto_msgTypes[13]
+	mi := &file_sync_v1_sync_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -841,7 +917,7 @@ func (x *CompleteAssetUploadRequest) String() string {
 func (*CompleteAssetUploadRequest) ProtoMessage() {}
 
 func (x *CompleteAssetUploadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_sync_v1_sync_proto_msgTypes[13]
+	mi := &file_sync_v1_sync_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -854,7 +930,7 @@ func (x *CompleteAssetUploadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompleteAssetUploadRequest.ProtoReflect.Descriptor instead.
 func (*CompleteAssetUploadRequest) Descriptor() ([]byte, []int) {
-	return file_sync_v1_sync_proto_rawDescGZIP(), []int{13}
+	return file_sync_v1_sync_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *CompleteAssetUploadRequest) GetCaptureId() string {
@@ -889,7 +965,7 @@ type CompleteAssetUploadResponse struct {
 
 func (x *CompleteAssetUploadResponse) Reset() {
 	*x = CompleteAssetUploadResponse{}
-	mi := &file_sync_v1_sync_proto_msgTypes[14]
+	mi := &file_sync_v1_sync_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -901,7 +977,7 @@ func (x *CompleteAssetUploadResponse) String() string {
 func (*CompleteAssetUploadResponse) ProtoMessage() {}
 
 func (x *CompleteAssetUploadResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_sync_v1_sync_proto_msgTypes[14]
+	mi := &file_sync_v1_sync_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -914,7 +990,7 @@ func (x *CompleteAssetUploadResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CompleteAssetUploadResponse.ProtoReflect.Descriptor instead.
 func (*CompleteAssetUploadResponse) Descriptor() ([]byte, []int) {
-	return file_sync_v1_sync_proto_rawDescGZIP(), []int{14}
+	return file_sync_v1_sync_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *CompleteAssetUploadResponse) GetVerified() bool {
@@ -980,11 +1056,17 @@ const file_sync_v1_sync_proto_rawDesc = "" +
 	"\aresults\x18\x01 \x03(\v2\x1c.sync.v1.PushMutationsResultR\aresults\"L\n" +
 	"\x11PullDeltasRequest\x12!\n" +
 	"\fworkspace_id\x18\x01 \x01(\tR\vworkspaceId\x12\x14\n" +
-	"\x05since\x18\x02 \x01(\x03R\x05since\"|\n" +
+	"\x05since\x18\x02 \x01(\x03R\x05since\"\xb3\x01\n" +
 	"\x12PullDeltasResponse\x12/\n" +
 	"\tmutations\x18\x01 \x03(\v2\x11.sync.v1.MutationR\tmutations\x12\x1a\n" +
 	"\brevision\x18\x02 \x01(\x03R\brevision\x12\x19\n" +
-	"\bhas_more\x18\x03 \x01(\bR\ahasMore\"\xa9\x01\n" +
+	"\bhas_more\x18\x03 \x01(\bR\ahasMore\x125\n" +
+	"\bcaptures\x18\x04 \x03(\v2\x19.sync.v1.CaptureSyncStateR\bcaptures\"z\n" +
+	"\x10CaptureSyncState\x12\x1d\n" +
+	"\n" +
+	"capture_id\x18\x01 \x01(\tR\tcaptureId\x12+\n" +
+	"\x11manifest_complete\x18\x02 \x01(\bR\x10manifestComplete\x12\x1a\n" +
+	"\brevision\x18\x03 \x01(\x03R\brevision\"\xa9\x01\n" +
 	"\x19RequestAssetUploadRequest\x12\x1d\n" +
 	"\n" +
 	"capture_id\x18\x01 \x01(\tR\tcaptureId\x12\x19\n" +
@@ -1032,7 +1114,7 @@ func file_sync_v1_sync_proto_rawDescGZIP() []byte {
 	return file_sync_v1_sync_proto_rawDescData
 }
 
-var file_sync_v1_sync_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
+var file_sync_v1_sync_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_sync_v1_sync_proto_goTypes = []any{
 	(*SetTitle)(nil),                    // 0: sync.v1.SetTitle
 	(*SetSummary)(nil),                  // 1: sync.v1.SetSummary
@@ -1045,11 +1127,12 @@ var file_sync_v1_sync_proto_goTypes = []any{
 	(*PushMutationsResponse)(nil),       // 8: sync.v1.PushMutationsResponse
 	(*PullDeltasRequest)(nil),           // 9: sync.v1.PullDeltasRequest
 	(*PullDeltasResponse)(nil),          // 10: sync.v1.PullDeltasResponse
-	(*RequestAssetUploadRequest)(nil),   // 11: sync.v1.RequestAssetUploadRequest
-	(*RequestAssetUploadResponse)(nil),  // 12: sync.v1.RequestAssetUploadResponse
-	(*CompleteAssetUploadRequest)(nil),  // 13: sync.v1.CompleteAssetUploadRequest
-	(*CompleteAssetUploadResponse)(nil), // 14: sync.v1.CompleteAssetUploadResponse
-	nil,                                 // 15: sync.v1.RequestAssetUploadResponse.RequiredHeadersEntry
+	(*CaptureSyncState)(nil),            // 11: sync.v1.CaptureSyncState
+	(*RequestAssetUploadRequest)(nil),   // 12: sync.v1.RequestAssetUploadRequest
+	(*RequestAssetUploadResponse)(nil),  // 13: sync.v1.RequestAssetUploadResponse
+	(*CompleteAssetUploadRequest)(nil),  // 14: sync.v1.CompleteAssetUploadRequest
+	(*CompleteAssetUploadResponse)(nil), // 15: sync.v1.CompleteAssetUploadResponse
+	nil,                                 // 16: sync.v1.RequestAssetUploadResponse.RequiredHeadersEntry
 }
 var file_sync_v1_sync_proto_depIdxs = []int32{
 	0,  // 0: sync.v1.Mutation.set_title:type_name -> sync.v1.SetTitle
@@ -1060,20 +1143,21 @@ var file_sync_v1_sync_proto_depIdxs = []int32{
 	5,  // 5: sync.v1.PushMutationsRequest.mutations:type_name -> sync.v1.Mutation
 	7,  // 6: sync.v1.PushMutationsResponse.results:type_name -> sync.v1.PushMutationsResult
 	5,  // 7: sync.v1.PullDeltasResponse.mutations:type_name -> sync.v1.Mutation
-	15, // 8: sync.v1.RequestAssetUploadResponse.required_headers:type_name -> sync.v1.RequestAssetUploadResponse.RequiredHeadersEntry
-	6,  // 9: sync.v1.SyncService.PushMutations:input_type -> sync.v1.PushMutationsRequest
-	9,  // 10: sync.v1.SyncService.PullDeltas:input_type -> sync.v1.PullDeltasRequest
-	11, // 11: sync.v1.SyncService.RequestAssetUpload:input_type -> sync.v1.RequestAssetUploadRequest
-	13, // 12: sync.v1.SyncService.CompleteAssetUpload:input_type -> sync.v1.CompleteAssetUploadRequest
-	8,  // 13: sync.v1.SyncService.PushMutations:output_type -> sync.v1.PushMutationsResponse
-	10, // 14: sync.v1.SyncService.PullDeltas:output_type -> sync.v1.PullDeltasResponse
-	12, // 15: sync.v1.SyncService.RequestAssetUpload:output_type -> sync.v1.RequestAssetUploadResponse
-	14, // 16: sync.v1.SyncService.CompleteAssetUpload:output_type -> sync.v1.CompleteAssetUploadResponse
-	13, // [13:17] is the sub-list for method output_type
-	9,  // [9:13] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	11, // 8: sync.v1.PullDeltasResponse.captures:type_name -> sync.v1.CaptureSyncState
+	16, // 9: sync.v1.RequestAssetUploadResponse.required_headers:type_name -> sync.v1.RequestAssetUploadResponse.RequiredHeadersEntry
+	6,  // 10: sync.v1.SyncService.PushMutations:input_type -> sync.v1.PushMutationsRequest
+	9,  // 11: sync.v1.SyncService.PullDeltas:input_type -> sync.v1.PullDeltasRequest
+	12, // 12: sync.v1.SyncService.RequestAssetUpload:input_type -> sync.v1.RequestAssetUploadRequest
+	14, // 13: sync.v1.SyncService.CompleteAssetUpload:input_type -> sync.v1.CompleteAssetUploadRequest
+	8,  // 14: sync.v1.SyncService.PushMutations:output_type -> sync.v1.PushMutationsResponse
+	10, // 15: sync.v1.SyncService.PullDeltas:output_type -> sync.v1.PullDeltasResponse
+	13, // 16: sync.v1.SyncService.RequestAssetUpload:output_type -> sync.v1.RequestAssetUploadResponse
+	15, // 17: sync.v1.SyncService.CompleteAssetUpload:output_type -> sync.v1.CompleteAssetUploadResponse
+	14, // [14:18] is the sub-list for method output_type
+	10, // [10:14] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_sync_v1_sync_proto_init() }
@@ -1094,7 +1178,7 @@ func file_sync_v1_sync_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_sync_v1_sync_proto_rawDesc), len(file_sync_v1_sync_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   16,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

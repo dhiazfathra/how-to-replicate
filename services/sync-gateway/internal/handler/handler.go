@@ -89,7 +89,7 @@ func (s *SyncService) PullDeltas(
 		return nil, connect.NewError(connect.CodePermissionDenied, errPermissionDenied)
 	}
 
-	mutations, revision, hasMore, err := s.Gateway.PullDeltas(ctx, workspaceID, req.Msg.GetSince(), 0)
+	mutations, revision, hasMore, captures, err := s.Gateway.PullDeltas(ctx, workspaceID, req.Msg.GetSince(), 0)
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInternal, err)
 	}
@@ -98,6 +98,7 @@ func (s *SyncService) PullDeltas(
 		Mutations: mutations,
 		Revision:  revision,
 		HasMore:   hasMore,
+		Captures:  captures,
 	}), nil
 }
 

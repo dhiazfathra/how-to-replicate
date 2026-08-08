@@ -112,6 +112,14 @@ func (s *stubStore) SetCaptureManifestComplete(_ context.Context, captureID stri
 	return nil
 }
 
+func (s *stubStore) GetCaptureManifestState(_ context.Context, captureID string) (bool, int64, bool, error) {
+	c, ok := s.captures[captureID]
+	if !ok {
+		return false, 0, false, nil
+	}
+	return s.manifestComplete[captureID], c.Revision, true, nil
+}
+
 // stubObjectStore is a minimal in-memory gateway.ObjectStore.
 type stubObjectStore struct {
 	objects map[string][]byte

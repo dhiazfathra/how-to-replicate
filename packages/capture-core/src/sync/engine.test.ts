@@ -428,6 +428,57 @@ describe('createSyncEngine', () => {
     expect(await h.repo.getSyncCursor('ws-1')).toBe(5);
   });
 
+  it('pull writes manifest_complete and revision from PullDeltasResult.captures onto the local capture', async () => {
+    const transport = fakeTransport({
+      pullDeltas: vi.fn(
+        (): Promise<PullDeltasResult> =>
+          Promise.resolve({
+            mutations: [],
+            revision: 5,
+            hasMore: false,
+            captures: [{ captureId: 'cap-1', manifestComplete: true, revision: 5 }],
+          }),
+      ),
+    });
+    const engine = createSyncEngine({
+      transport,
+      repo: h.repo,
+      store: h.store,
+      queue: h.queue,
+      workspaceId: 'ws-1',
+    });
+
+    await engine.pull();
+
+    const sync = h.store.capture('cap-1').get()?.sync;
+    expect(sync?.manifestComplete).toBe(true);
+    expect(sync?.revision).toBe(5);
+  });
+
+  it('pull ignores a CaptureSyncState for a capture not present locally', async () => {
+    const transport = fakeTransport({
+      pullDeltas: vi.fn(
+        (): Promise<PullDeltasResult> =>
+          Promise.resolve({
+            mutations: [],
+            revision: 1,
+            hasMore: false,
+            captures: [{ captureId: 'cap-does-not-exist', manifestComplete: true, revision: 1 }],
+          }),
+      ),
+    });
+    const engine = createSyncEngine({
+      transport,
+      repo: h.repo,
+      store: h.store,
+      queue: h.queue,
+      workspaceId: 'ws-1',
+    });
+
+    await expect(engine.pull()).resolves.toBeUndefined();
+    expect(h.store.capture('cap-1').get()?.sync.manifestComplete).toBe(false);
+  });
+
   it('pull is a no-op without a workspaceId even with a transport configured', async () => {
     const pullDeltas = vi.fn();
     const engine = createSyncEngine({

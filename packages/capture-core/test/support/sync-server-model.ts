@@ -109,6 +109,9 @@ export function createSyncServerModel(): SyncTransport & { tick(): void } {
         mutations: rows.map((row) => row.mutation),
         revision,
         hasMore: false,
+        // Manifest completeness is out of scope for convergence testing
+        // (see requestAssetUpload/completeAssetUpload below) — no captures.
+        captures: [],
       });
     },
 

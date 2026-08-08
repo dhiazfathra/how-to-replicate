@@ -6,10 +6,22 @@ export type PushMutationsResult = {
   error: string;
 };
 
+/** One capture's server-side sync state as of a pull, mirroring proto's CaptureSyncState. */
+export type CaptureSyncState = {
+  captureId: string;
+  manifestComplete: boolean;
+  revision: number;
+};
+
 export type PullDeltasResult = {
   mutations: Mutation[];
   revision: number;
   hasMore: boolean;
+  /** One entry per capture with at least one mutation in this page — the
+   * only channel by which server-side manifest_complete reaches the client.
+   * Optional for backward compatibility with existing transport fakes that
+   * predate this field; engine.ts treats a missing value as empty. */
+  captures?: CaptureSyncState[];
 };
 
 export type AssetUploadTicket = {

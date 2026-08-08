@@ -20,24 +20,49 @@ const defaultPullDeltasLimit = 500
 // optimization over the pull, never the only path") — the WebSocket fan-out
 // in internal/realtime calls this same method rather than duplicating the
 // decode logic.
-func (g *Gateway) PullDeltas(ctx context.Context, workspaceID string, since int64, limit int32) (mutations []*syncv1.Mutation, revision int64, hasMore bool, err error) {
+func (g *Gateway) PullDeltas(ctx context.Context, workspaceID string, since int64, limit int32) (mutations []*syncv1.Mutation, revision int64, hasMore bool, captures []*syncv1.CaptureSyncState, err error) {
 	if limit <= 0 {
 		limit = defaultPullDeltasLimit
 	}
 
 	var rows []DeltaMutation
+	var states []*syncv1.CaptureSyncState
 	err = g.WithinTx(ctx, func(ctx context.Context, s Store) error {
 		var e error
 		rows, e = s.PullMutationsSince(ctx, workspaceID, since, limit+1)
-		return e
+		if e != nil {
+			return e
+		}
+		if int32(len(rows)) > limit { //nolint:gosec // len(rows) <= limit+1, itself an int32 argument; never near MaxInt32
+			hasMore = true
+			rows = rows[:limit]
+		}
+		// One CaptureSyncState per distinct capture touched in this page,
+		// in first-seen order — the only channel manifest_complete has to
+		// reach the client (see Store.GetCaptureManifestState).
+		seen := make(map[string]bool, len(rows))
+		for _, row := range rows {
+			if seen[row.CaptureID] {
+				continue
+			}
+			seen[row.CaptureID] = true
+			complete, rev, found, e := s.GetCaptureManifestState(ctx, row.CaptureID)
+			if e != nil {
+				return e
+			}
+			if !found {
+				continue
+			}
+			states = append(states, &syncv1.CaptureSyncState{
+				CaptureId:        row.CaptureID,
+				ManifestComplete: complete,
+				Revision:         rev,
+			})
+		}
+		return nil
 	})
 	if err != nil {
-		return nil, since, false, fmt.Errorf("gateway: pull deltas: %w", err)
-	}
-
-	hasMore = int32(len(rows)) > limit //nolint:gosec // len(rows) <= limit+1, itself an int32 argument; never near MaxInt32
-	if hasMore {
-		rows = rows[:limit]
+		return nil, since, false, nil, fmt.Errorf("gateway: pull deltas: %w", err)
 	}
 
 	revision = since
@@ -45,7 +70,7 @@ func (g *Gateway) PullDeltas(ctx context.Context, workspaceID string, since int6
 	for _, row := range rows {
 		m, decErr := decodePayload(row.Op, row.Payload)
 		if decErr != nil {
-			return nil, since, false, fmt.Errorf("gateway: decode delta %s: %w", row.ID, decErr)
+			return nil, since, false, nil, fmt.Errorf("gateway: decode delta %s: %w", row.ID, decErr)
 		}
 		m.Id = row.ID
 		m.CaptureId = row.CaptureID
@@ -53,7 +78,7 @@ func (g *Gateway) PullDeltas(ctx context.Context, workspaceID string, since int6
 		mutations = append(mutations, m)
 		revision = row.Seq
 	}
-	return mutations, revision, hasMore, nil
+	return mutations, revision, hasMore, states, nil
 }
 
 // decodePayload reverses decodeOp/opName: given the op name and payload

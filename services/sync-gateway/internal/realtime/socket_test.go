@@ -42,7 +42,7 @@ func (g *fakeGateway) push(workspaceID string, m *syncv1.Mutation) {
 	g.data[workspaceID] = append(g.data[workspaceID], m)
 }
 
-func (g *fakeGateway) PullDeltas(_ context.Context, workspaceID string, since int64, limit int32) ([]*syncv1.Mutation, int64, bool, error) {
+func (g *fakeGateway) PullDeltas(_ context.Context, workspaceID string, since int64, limit int32) ([]*syncv1.Mutation, int64, bool, []*syncv1.CaptureSyncState, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	all := g.data[workspaceID]
@@ -57,7 +57,7 @@ func (g *fakeGateway) PullDeltas(_ context.Context, workspaceID string, since in
 	if hasMore {
 		rest = rest[:limit]
 	}
-	return rest, since + int64(len(rest)), hasMore, nil
+	return rest, since + int64(len(rest)), hasMore, nil, nil
 }
 
 func setTitleMutation(id, title string) *syncv1.Mutation {
@@ -198,7 +198,7 @@ func TestSocket_ReconnectAfterGapConvergesViaPull(t *testing.T) {
 	// PullDeltas method the socket loop itself calls (since=0, i.e. from
 	// scratch) — this is the recovery path the brief requires, and it must
 	// converge on the identical set the live socket saw.
-	recovered, _, _, err := gw.PullDeltas(context.Background(), "ws1", 0, 0)
+	recovered, _, _, _, err := gw.PullDeltas(context.Background(), "ws1", 0, 0)
 	if err != nil {
 		t.Fatalf("PullDeltas: %v", err)
 	}
@@ -581,6 +581,6 @@ func TestSocket_RequestContextEndingClosesSocket(t *testing.T) {
 
 type erroringGateway struct{}
 
-func (erroringGateway) PullDeltas(context.Context, string, int64, int32) ([]*syncv1.Mutation, int64, bool, error) {
-	return nil, 0, false, errors.New("boom")
+func (erroringGateway) PullDeltas(context.Context, string, int64, int32) ([]*syncv1.Mutation, int64, bool, []*syncv1.CaptureSyncState, error) {
+	return nil, 0, false, nil, errors.New("boom")
 }

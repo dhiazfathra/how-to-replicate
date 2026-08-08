@@ -265,6 +265,21 @@ export function createSyncEngine(config: SyncEngineConfig): SyncEngine {
         await store.setField(mutation.captureId, topLevelKeyOf(field), updated[topLevelKeyOf(field)]);
       }
 
+      // Capture-level sync state (manifest_complete, revision) is the only
+      // channel by which server-side manifest verification (Task 5) reaches
+      // the client — eviction (storage/eviction.ts) reads
+      // capture.sync.manifestComplete and can never see it true without
+      // this write.
+      for (const captureState of page.captures ?? []) {
+        const current = store.capture(captureState.captureId).get();
+        if (!current) continue;
+        await store.setField(captureState.captureId, 'sync', {
+          ...current.sync,
+          revision: captureState.revision,
+          manifestComplete: captureState.manifestComplete,
+        });
+      }
+
       since = page.revision;
       await repo.putSyncCursor(workspaceId, since);
       if (!page.hasMore) break;
