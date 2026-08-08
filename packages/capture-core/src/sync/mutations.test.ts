@@ -118,4 +118,21 @@ describe('mutations', () => {
       { id: 'c2', body: 'second' },
     ]);
   });
+
+  it('applyMutation sort comparator hits the equal-id branch when ids tie', () => {
+    // The comparator's equal branch (`a.id === b.id`) is only reachable if
+    // two entries already share an id before a new comment is appended —
+    // impossible via applyMutation's own dedup guard, so construct that
+    // pre-existing state directly rather than through two applyMutation calls.
+    let capture = withFieldValue(makeCapture(), 'metadata.comments', [
+      { id: 'dup', body: 'first' },
+      { id: 'dup', body: 'second' },
+    ]);
+    capture = applyMutation(capture, { type: 'appendComment', commentId: 'z', body: 'third' });
+    expect(capture.metadata.comments).toEqual([
+      { id: 'dup', body: 'first' },
+      { id: 'dup', body: 'second' },
+      { id: 'z', body: 'third' },
+    ]);
+  });
 });

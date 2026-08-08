@@ -253,3 +253,19 @@ describe('sync convergence property', () => {
     },
   );
 });
+
+describe('createSyncServerModel asset-upload stubs', () => {
+  it('requestAssetUpload rejects — assets are out of scope for convergence testing', async () => {
+    const model = createSyncServerModel();
+    await expect(model.requestAssetUpload()).rejects.toThrow(
+      'sync-server-model: assets are out of scope for convergence testing',
+    );
+  });
+
+  it('completeAssetUpload rejects — assets are out of scope for convergence testing', async () => {
+    const model = createSyncServerModel();
+    await expect(model.completeAssetUpload()).rejects.toThrow(
+      'sync-server-model: assets are out of scope for convergence testing',
+    );
+  });
+});

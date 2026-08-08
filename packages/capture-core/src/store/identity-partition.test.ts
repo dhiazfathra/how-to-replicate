@@ -195,4 +195,35 @@ describe('purgePartition', () => {
   it('deletes a partition with no open handle without hanging', async () => {
     await expect(purgePartition(A)).resolves.toBeUndefined();
   });
+
+  it('rejects when the underlying deleteDatabase request errors', async () => {
+    const failingIndexedDB = {
+      deleteDatabase: () => {
+        const request = {} as IDBOpenDBRequest;
+        queueMicrotask(() => {
+          (request as { error: Error | null }).error = new Error('boom');
+          (request.onerror as (() => void) | null)?.();
+        });
+        return request;
+      },
+    } as unknown as IDBFactory;
+
+    await expect(purgePartition(A, { indexedDB: failingIndexedDB })).rejects.toThrow('boom');
+  });
+
+  it('rejects with a synthesized error when the request errors without one', async () => {
+    const failingIndexedDB = {
+      deleteDatabase: () => {
+        const request = {} as IDBOpenDBRequest;
+        queueMicrotask(() => {
+          (request.onerror as (() => void) | null)?.();
+        });
+        return request;
+      },
+    } as unknown as IDBFactory;
+
+    await expect(purgePartition(A, { indexedDB: failingIndexedDB })).rejects.toThrow(
+      /deleteDatabase.*failed/,
+    );
+  });
 });
