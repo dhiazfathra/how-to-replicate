@@ -118,6 +118,12 @@ jobs:
           version: latest
           working-directory: services/capture-api
 
+      - name: golangci-lint (redaction-audit)
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          working-directory: services/redaction-audit
+
   go-test:
     runs-on: ubuntu-latest
     steps:
@@ -180,6 +186,24 @@ jobs:
 
       - name: Enforce 100% coverage (capture-api)
         working-directory: services/capture-api
+        run: |
+          go tool cover -func=coverage.out | tee coverage.txt
+          total=$(grep '^total:' coverage.txt | awk '{print $3}' | tr -d '%')
+          echo "total coverage: ${total}%"
+          if awk "BEGIN { exit !($total < 100) }"; then
+            echo "coverage ${total}% is below the required 100%"
+            exit 1
+          fi
+
+      # redaction-audit: the conformance suite proving the Go and TS
+      # redaction engines agree on the golden synthetic-PHI corpus. Most
+      # important test asset in the repo (per CLAUDE.md) — 100%-gated below.
+      - name: Test redaction-audit with coverage
+        working-directory: services/redaction-audit
+        run: go test $(go list ./... | grep -v /cmd/) -covermode=atomic -coverprofile=coverage.out
+
+      - name: Enforce 100% coverage (redaction-audit)
+        working-directory: services/redaction-audit
         run: |
           go tool cover -func=coverage.out | tee coverage.txt
           total=$(grep '^total:' coverage.txt | awk '{print $3}' | tr -d '%')
