@@ -27,6 +27,10 @@ type stubStore struct {
 	manifestComplete  map[string]bool
 	deltaLog          []gateway.DeltaMutation
 	deltaLogWorkspace []string
+
+	// lockErr, if set, is returned by LockCaptureForWorkspace — used to
+	// exercise RequestAssetUpload's real (non-typed-reason) error path.
+	lockErr error
 }
 
 func newStubStore() *stubStore {
@@ -123,6 +127,10 @@ func (s *stubStore) GetCaptureManifestState(_ context.Context, captureID string)
 // stubObjectStore is a minimal in-memory gateway.ObjectStore.
 type stubObjectStore struct {
 	objects map[string][]byte
+
+	// statErr, if set, is returned by StatSize — used to exercise
+	// CompleteAssetUpload's real (non-typed-reason) error path.
+	statErr error
 }
 
 func newStubObjectStore() *stubObjectStore {
@@ -135,6 +143,9 @@ func (o *stubObjectStore) PresignPutChecksummed(_ context.Context, key string, _
 }
 
 func (o *stubObjectStore) StatSize(_ context.Context, key string) (bool, int64, error) {
+	if o.statErr != nil {
+		return false, 0, o.statErr
+	}
 	b, ok := o.objects[key]
 	if !ok {
 		return false, 0, nil
@@ -157,6 +168,9 @@ func sha256HexOf(b []byte) string {
 }
 
 func (s *stubStore) LockCaptureForWorkspace(_ context.Context, captureID, workspaceID string) (gateway.Capture, bool, error) {
+	if s.lockErr != nil {
+		return gateway.Capture{}, false, s.lockErr
+	}
 	c, ok := s.captures[captureID]
 	if !ok || c.WorkspaceID != workspaceID {
 		return gateway.Capture{}, false, nil
@@ -547,6 +561,70 @@ func TestSyncService_RequestAssetUpload_MissingRoleIsPermissionDenied(t *testing
 	var connectErr *connect.Error
 	if !errors.As(err, &connectErr) || connectErr.Code() != connect.CodePermissionDenied {
 		t.Fatalf("want CodePermissionDenied, got %v", err)
+	}
+}
+
+func TestSyncService_RequestAssetUpload_GatewayErrorIsInternal(t *testing.T) {
+	store := newStubStore()
+	store.lockErr = errors.New("boom")
+	svc := newTestService(store)
+
+	req := connect.NewRequest(&syncv1.RequestAssetUploadRequest{
+		CaptureId: "cap_1",
+		AssetId:   "asset_1",
+		MimeType:  "video/mp4",
+		SizeBytes: 10,
+		Sha256:    sha256HexOf([]byte("x")),
+	})
+	_, err := svc.RequestAssetUpload(assetUploadCtx(), req)
+	var connectErr *connect.Error
+	if !errors.As(err, &connectErr) || connectErr.Code() != connect.CodeInternal {
+		t.Fatalf("want CodeInternal, got %v", err)
+	}
+}
+
+func TestSyncService_CompleteAssetUpload_GatewayErrorIsInternal(t *testing.T) {
+	store := newStubStore()
+	store.captures["cap_1"] = gateway.Capture{ID: "cap_1", WorkspaceID: "ws_1"}
+	objStore := newStubObjectStore()
+	svc := newTestServiceWithStorage(store, objStore)
+
+	respUp, err := svc.RequestAssetUpload(assetUploadCtx(), connect.NewRequest(&syncv1.RequestAssetUploadRequest{
+		CaptureId: "cap_1", AssetId: "asset_1", MimeType: "video/mp4",
+		SizeBytes: 5, Sha256: sha256HexOf([]byte("hello")),
+	}))
+	if err != nil {
+		t.Fatalf("RequestAssetUpload: %v", err)
+	}
+	objStore.objects[respUp.Msg.GetObjectKey()] = []byte("hello")
+	objStore.statErr = errors.New("boom")
+
+	_, err = svc.CompleteAssetUpload(assetUploadCtx(), connect.NewRequest(&syncv1.CompleteAssetUploadRequest{
+		CaptureId: "cap_1", AssetId: "asset_1",
+	}))
+	var connectErr *connect.Error
+	if !errors.As(err, &connectErr) || connectErr.Code() != connect.CodeInternal {
+		t.Fatalf("want CodeInternal, got %v", err)
+	}
+}
+
+func TestAssetReasonCode(t *testing.T) {
+	cases := []struct {
+		reason gateway.AssetReason
+		want   connect.Code
+	}{
+		{gateway.AssetReasonNotFound, connect.CodeNotFound},
+		{gateway.AssetReasonInvalidRequest, connect.CodeInvalidArgument},
+		{gateway.AssetReasonPresignExpired, connect.CodeFailedPrecondition},
+		{gateway.AssetReasonAlreadyConsumed, connect.CodeFailedPrecondition},
+		{gateway.AssetReasonSizeMismatch, connect.CodeFailedPrecondition},
+		{gateway.AssetReasonHashMismatch, connect.CodeFailedPrecondition},
+		{gateway.AssetReasonNotUploaded, connect.CodeFailedPrecondition},
+	}
+	for _, tc := range cases {
+		if got := assetReasonCode(tc.reason); got != tc.want {
+			t.Errorf("assetReasonCode(%q) = %v, want %v", tc.reason, got, tc.want)
+		}
 	}
 }
 

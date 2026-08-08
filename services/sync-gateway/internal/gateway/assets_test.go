@@ -431,6 +431,38 @@ func TestRequestAssetUpload_InfraErrors(t *testing.T) {
 			t.Fatal("expected error")
 		}
 	})
+	t.Run("random key suffix generation error", func(t *testing.T) {
+		store := newFakeStore()
+		seedAssetCapture(store)
+		gw := newAssetTestGateway(store, newFakeObjectStore(), time.Unix(0, 0))
+
+		prevRandRead := randRead
+		randRead = failingRandRead
+		defer func() { randRead = prevRandRead }()
+
+		if _, err := gw.RequestAssetUpload(context.Background(), testWorkspace, testCapture, testAsset, "video/mp4", int64(len(body)), sha256Hex(body)); err == nil {
+			t.Fatal("expected error")
+		}
+	})
+}
+
+// failingRandRead always fails, used to exercise randomKeySuffix's error
+// path without depending on any real entropy-source failure — crypto/rand
+// itself treats a read failure as fatal (it calls runtime.fatal, not
+// something a defer/recover can catch), so the seam is randRead, not
+// crypto/rand.Reader.
+func failingRandRead([]byte) (int, error) {
+	return 0, errors.New("failingRandRead: read failed")
+}
+
+func TestRandomKeySuffix_ReadError(t *testing.T) {
+	prevRandRead := randRead
+	randRead = failingRandRead
+	defer func() { randRead = prevRandRead }()
+
+	if _, err := randomKeySuffix(); err == nil {
+		t.Fatal("expected error")
+	}
 }
 
 // --- CompleteAssetUpload -------------------------------------------------------

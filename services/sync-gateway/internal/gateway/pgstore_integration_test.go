@@ -423,6 +423,22 @@ func TestPgStore_ErrorWrapping(t *testing.T) {
 		}
 	})
 
+	t.Run("ManifestComplete with zero assets", func(t *testing.T) {
+		complete, err := store.ManifestComplete(ctx, "cap_int")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if complete {
+			t.Fatalf("want incomplete manifest for a capture with no assets")
+		}
+	})
+
+	t.Run("GetCaptureManifestState on a cancelled context", func(t *testing.T) {
+		if _, _, _, err := store.GetCaptureManifestState(cancelled, "cap_int"); err == nil {
+			t.Fatalf("want error, got nil")
+		}
+	})
+
 	t.Run("SetCaptureManifestComplete against a nonexistent capture", func(t *testing.T) {
 		if err := store.SetCaptureManifestComplete(ctx, "does_not_exist", true); err == nil {
 			t.Fatalf("want no-rows error, got nil")

@@ -97,12 +97,18 @@ func assetKindFor(mimeType string) string {
 	return "screenshot"
 }
 
+// randRead is crypto/rand.Read, indirected so tests can exercise
+// randomKeySuffix's error path — crypto/rand.Read itself treats a read
+// failure as fatal (runtime.fatal, uncatchable by defer/recover), so
+// swapping rand.Reader can't simulate that branch; this seam can.
+var randRead = rand.Read
+
 // randomKeySuffix returns 16 random bytes hex-encoded, used to make every
 // issued object key unique — a re-request never reuses a key, per the
 // brief.
 func randomKeySuffix() (string, error) {
 	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
+	if _, err := randRead(b); err != nil {
 		return "", fmt.Errorf("gateway: generate key suffix: %w", err)
 	}
 	return hex.EncodeToString(b), nil

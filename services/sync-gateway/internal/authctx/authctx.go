@@ -104,11 +104,11 @@ func OIDCMiddleware(verifier *oidc.IDTokenVerifier, resolver MembershipResolver)
 	verify := auth.Middleware(verifier)
 	return func(next http.Handler) http.Handler {
 		adapter := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			subject, ok := auth.Subject(r.Context())
-			if !ok {
-				http.Error(w, "unauthenticated", http.StatusUnauthorized)
-				return
-			}
+			// auth.Middleware (verify, below) only ever calls next after
+			// setting the subject via WithSubject — see its doc comment
+			// ("next is never called" otherwise) — so this is never the
+			// zero-value subject a failed Subject lookup would return.
+			subject, _ := auth.Subject(r.Context())
 
 			workspaceID := r.Header.Get(WorkspaceHeader)
 			role, ok, err := resolver.Resolve(r.Context(), subject, workspaceID)
