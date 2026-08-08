@@ -128,13 +128,9 @@ func (p *Pipeline) Advance(ctx context.Context, job sqlcgen.PurgeJob) (sqlcgen.P
 			return job, fmt.Errorf("purge: list asset keys for capture %s: %w", job.CaptureID, err)
 		}
 		// keys is a plain []string — Marshal on it cannot fail, same
-		// reasoning as policy.Overrides' Marshal call sites in
-		// capture-api/internal/api/handlers.go; the error is still
-		// checked defensively rather than discarded.
-		keysJSON, err := json.Marshal(keys)
-		if err != nil {
-			return job, fmt.Errorf("purge: marshal object keys for capture %s: %w", job.CaptureID, err)
-		}
+		// reasoning and discard convention as policy.Overrides' Marshal
+		// call sites in capture-api/internal/api/handlers.go.
+		keysJSON, _ := json.Marshal(keys)
 		return p.Store.SetPurgeJobObjectKeysAndState(ctx, sqlcgen.SetPurgeJobObjectKeysAndStateParams{
 			ID:         job.ID,
 			ObjectKeys: keysJSON,

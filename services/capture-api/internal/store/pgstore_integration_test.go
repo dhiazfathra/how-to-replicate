@@ -391,6 +391,22 @@ func TestPurgePrimitives_ErrorPaths(t *testing.T) {
 	if _, err := FinalizePurgeForCapture(ctx, pool, "job_err_ok", cap1.ID, ws.ID); err == nil {
 		t.Fatal("FinalizePurgeForCapture() re-run with the same job id: err = nil, want error (duplicate audit_log id)")
 	}
+
+	// FinalizePurgeForCapture's very first statement — DeleteAssetsForCapture —
+	// only errors on something the query itself is refused, not on zero rows
+	// matched. Revoke the runtime role's DELETE on assets via the admin
+	// connection so that first statement fails with a permission error, then
+	// restore the grant. This is the one deterministic way to exercise that
+	// error branch without breaking the transaction wrapper itself.
+	if _, err := sqlDB.ExecContext(ctx, "REVOKE DELETE ON assets FROM "+db.RuntimeRole); err != nil { //nolint:gosec // db.RuntimeRole is a package constant, not user input
+		t.Fatalf("revoke delete on assets: %v", err)
+	}
+	if _, err := FinalizePurgeForCapture(ctx, pool, "job_err_ok", cap1.ID, ws.ID); err == nil {
+		t.Fatal("FinalizePurgeForCapture() with DELETE on assets revoked: err = nil, want error")
+	}
+	if _, err := sqlDB.ExecContext(ctx, "GRANT DELETE ON assets TO "+db.RuntimeRole); err != nil { //nolint:gosec // db.RuntimeRole is a package constant, not user input
+		t.Fatalf("restore delete grant on assets: %v", err)
+	}
 }
 
 // TestCreateWorkspaceWithOwner_RequiresRetentionOverride proves the
