@@ -1,13 +1,13 @@
 {
   "capture": {
-    "id": "01KZFJ9TAR2YBJDVQ0RT8726R8",
+    "id": "01KZMPXGSTSVFQQJ4YXHT8D84D",
     "workspaceId": null,
     "projectId": "clinic-portal",
     "source": "extension",
     "state": "ready",
     "fidelity": "full",
-    "createdAt": "2026-08-08T02:12:46.042Z",
-    "epoch": 1786155166040.4,
+    "createdAt": "2026-08-10T02:09:38.107Z",
+    "epoch": 1786327778106.9,
     "env": {
       "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/151.0.7922.34 Safari/537.36",
       "platform": "MacIntel",
@@ -31,7 +31,7 @@
           "n": 1,
           "text": "Typed into \"Medical record number\" on http://127.0.0.1:5178/",
           "eventIds": [
-            "01KZFJ9TSKT43H702VYMYYKZGH"
+            "01KZMPXGTSDNCWX0V850CT90SW"
           ],
           "tVideo": null
         },
@@ -39,7 +39,7 @@
           "n": 2,
           "text": "Typed into \"Contact email\" on http://127.0.0.1:5178/",
           "eventIds": [
-            "01KZFJ9WNP39ESZ45FN3KN7T1Y"
+            "01KZMPXGV2H3PZ3E6RH4S1F3D6"
           ],
           "tVideo": null
         },
@@ -47,7 +47,7 @@
           "n": 3,
           "text": "Clicked \"Look up patient\" on http://127.0.0.1:5178/",
           "eventIds": [
-            "01KZFJA1KBX59MSB0EYTVF59WW"
+            "01KZMPXGVKMFKP355MTCA08Z1T"
           ],
           "tVideo": null
         },
@@ -55,7 +55,7 @@
           "n": 4,
           "text": "Submitted \"Patient lookup\\n        \\n          Medical record number\\n          \\n        \\n        \\n          Contact email\\n          \\n        \\n        Look up patient\" on http://127.0.0.1:5178/",
           "eventIds": [
-            "01KZFJA1NCXE97TSBDKV048C8Z"
+            "01KZMPXGVM9G1Z30BHRJSKSG04"
           ],
           "tVideo": null
         },
@@ -63,7 +63,7 @@
           "n": 5,
           "text": "Clicked \"Open chart for [REDACTED:mrn]\" on http://127.0.0.1:5178/",
           "eventIds": [
-            "01KZFJA59N7A29739FE6HWKAFK"
+            "01KZMPXGXN8QC86CTGHX0HG2TR"
           ],
           "tVideo": null
         },
@@ -71,7 +71,7 @@
           "n": 6,
           "text": "Clicked \"Load chart (v2 API)\" on http://127.0.0.1:5178/",
           "eventIds": [
-            "01KZFJA78824AAJAX329ARQ9FN"
+            "01KZMPXGYHCP8FRR278G8D77WZ"
           ],
           "tVideo": null
         },
@@ -79,7 +79,7 @@
           "n": 7,
           "text": "Clicked \"Trigger the bug\" on http://127.0.0.1:5178/",
           "eventIds": [
-            "01KZFJAGPQ3NBFZ4NC5W3P88N1"
+            "01KZMPXH2NBYZ3E14Y116FP97E"
           ],
           "tVideo": null
         },
@@ -87,7 +87,7 @@
           "n": 8,
           "text": "Clicked \"Go to billing\" on http://127.0.0.1:5178/",
           "eventIds": [
-            "01KZFJAKKSF22M9M73TQQ2S6D5"
+            "01KZMPXH3D1817EF54N074QKWR"
           ],
           "tVideo": null
         },
@@ -95,7 +95,7 @@
           "n": 9,
           "text": "Navigated to http://127.0.0.1:5178/#/billing",
           "eventIds": [
-            "01KZFJAKQ3B9MNP29ZFJ9DWK9Y"
+            "01KZMPXH3KJTVN4C3D27FJRG6W"
           ],
           "tVideo": null
         }
@@ -116,9 +116,9 @@
   },
   "events": [
     {
-      "id": "01KZFJ9TSKT43H702VYMYYKZGH",
-      "captureId": "01KZFJ9TAR2YBJDVQ0RT8726R8",
-      "t": 475.20000000298023,
+      "id": "01KZMPXGTSDNCWX0V850CT90SW",
+      "captureId": "01KZMPXGSTSVFQQJ4YXHT8D84D",
+      "t": 30.300000000745058,
       "kind": "interaction",
       "payload": {
         "type": "input",
@@ -135,9 +135,9 @@
       }
     },
     {
-      "id": "01KZFJ9WNP39ESZ45FN3KN7T1Y",
-      "captureId": "01KZFJ9TAR2YBJDVQ0RT8726R8",
-      "t": 2399.6000000089407,
+      "id": "01KZMPXGV2H3PZ3E6RH4S1F3D6",
+      "captureId": "01KZMPXGSTSVFQQJ4YXHT8D84D",
+      "t": 39.40000000037253,
       "kind": "interaction",
       "payload": {
         "type": "input",
@@ -154,9 +154,9 @@
       }
     },
     {
-      "id": "01KZFJA1KBX59MSB0EYTVF59WW",
-      "captureId": "01KZFJ9TAR2YBJDVQ0RT8726R8",
-      "t": 7462.4000000059605,
+      "id": "01KZMPXGVKMFKP355MTCA08Z1T",
+      "captureId": "01KZMPXGSTSVFQQJ4YXHT8D84D",
+      "t": 56.600000001490116,
       "kind": "interaction",
       "payload": {
         "type": "click",
@@ -171,9 +171,9 @@
       }
     },
     {
-      "id": "01KZFJA1NCXE97TSBDKV048C8Z",
-      "captureId": "01KZFJ9TAR2YBJDVQ0RT8726R8",
-      "t": 7507.70000000298,
+      "id": "01KZMPXGVM9G1Z30BHRJSKSG04",
+      "captureId": "01KZMPXGSTSVFQQJ4YXHT8D84D",
+      "t": 57.5,
       "kind": "interaction",
       "payload": {
         "type": "submit",
@@ -188,9 +188,9 @@
       }
     },
     {
-      "id": "01KZFJA59N7A29739FE6HWKAFK",
-      "captureId": "01KZFJ9TAR2YBJDVQ0RT8726R8",
-      "t": 11229.5,
+      "id": "01KZMPXGXN8QC86CTGHX0HG2TR",
+      "captureId": "01KZMPXGSTSVFQQJ4YXHT8D84D",
+      "t": 123.10000000149012,
       "kind": "interaction",
       "payload": {
         "type": "click",
@@ -207,9 +207,9 @@
       }
     },
     {
-      "id": "01KZFJA78824AAJAX329ARQ9FN",
-      "captureId": "01KZFJ9TAR2YBJDVQ0RT8726R8",
-      "t": 13232.5,
+      "id": "01KZMPXGYHCP8FRR278G8D77WZ",
+      "captureId": "01KZMPXGSTSVFQQJ4YXHT8D84D",
+      "t": 150.30000000074506,
       "kind": "interaction",
       "payload": {
         "type": "click",
@@ -224,9 +224,9 @@
       }
     },
     {
-      "id": "01KZFJA809TECNB8HQNP07Y08E",
-      "captureId": "01KZFJ9TAR2YBJDVQ0RT8726R8",
-      "t": 14001.40000000596,
+      "id": "01KZMPXH0A75A3BCEMYHB9DG3T",
+      "captureId": "01KZMPXGSTSVFQQJ4YXHT8D84D",
+      "t": 207.80000000074506,
       "kind": "network",
       "payload": {
         "method": "POST",
@@ -245,7 +245,7 @@
         "responseHeaders": {
           "Transfer-Encoding": "chunked",
           "Keep-Alive": "timeout=5",
-          "Date": "Sat, 08 Aug 2026 02:12:59 GMT",
+          "Date": "Mon, 10 Aug 2026 02:09:38 GMT",
           "content-type": "application/json; charset=utf-8",
           "Connection": "keep-alive"
         },
@@ -270,9 +270,9 @@
       }
     },
     {
-      "id": "01KZFJAGPQ3NBFZ4NC5W3P88N1",
-      "captureId": "01KZFJ9TAR2YBJDVQ0RT8726R8",
-      "t": 22944,
+      "id": "01KZMPXH2NBYZ3E14Y116FP97E",
+      "captureId": "01KZMPXGSTSVFQQJ4YXHT8D84D",
+      "t": 282.40000000037253,
       "kind": "interaction",
       "payload": {
         "type": "click",
@@ -287,9 +287,9 @@
       }
     },
     {
-      "id": "01KZFJAGW05GHP2BTYXB31Q3VB",
-      "captureId": "01KZFJ9TAR2YBJDVQ0RT8726R8",
-      "t": 23079.90000000596,
+      "id": "01KZMPXH2P69QCYW86E74MQVB6",
+      "captureId": "01KZMPXGSTSVFQQJ4YXHT8D84D",
+      "t": 284,
       "kind": "console",
       "payload": {
         "level": "error",
@@ -306,9 +306,9 @@
       }
     },
     {
-      "id": "01KZFJAGYKFW5SSJ50G8Y19949",
-      "captureId": "01KZFJ9TAR2YBJDVQ0RT8726R8",
-      "t": 23163.5,
+      "id": "01KZMPXH2YBECFSN3EDBC6DVVD",
+      "captureId": "01KZMPXGSTSVFQQJ4YXHT8D84D",
+      "t": 291.5,
       "kind": "console",
       "payload": {
         "level": "error",
@@ -323,9 +323,9 @@
       }
     },
     {
-      "id": "01KZFJAKKSF22M9M73TQQ2S6D5",
-      "captureId": "01KZFJ9TAR2YBJDVQ0RT8726R8",
-      "t": 25889.80000001192,
+      "id": "01KZMPXH3D1817EF54N074QKWR",
+      "captureId": "01KZMPXGSTSVFQQJ4YXHT8D84D",
+      "t": 306.7000000011176,
       "kind": "interaction",
       "payload": {
         "type": "click",
@@ -340,9 +340,9 @@
       }
     },
     {
-      "id": "01KZFJAKQ3B9MNP29ZFJ9DWK9Y",
-      "captureId": "01KZFJ9TAR2YBJDVQ0RT8726R8",
-      "t": 25995.5,
+      "id": "01KZMPXH3KJTVN4C3D27FJRG6W",
+      "captureId": "01KZMPXGSTSVFQQJ4YXHT8D84D",
+      "t": 313.1000000014901,
       "kind": "navigation",
       "payload": {
         "from": "http://127.0.0.1:5178/",
@@ -355,9 +355,9 @@
       }
     },
     {
-      "id": "01KZFJAN6YKV6PG0TGGRBW0HXK",
-      "captureId": "01KZFJ9TAR2YBJDVQ0RT8726R8",
-      "t": 27526,
+      "id": "01KZMPXH4CW8RM4MM0HZWBXRCE",
+      "captureId": "01KZMPXGSTSVFQQJ4YXHT8D84D",
+      "t": 337.30000000074506,
       "kind": "lifecycle",
       "payload": {
         "transition": "recording->redacting",
@@ -369,9 +369,9 @@
       }
     },
     {
-      "id": "01KZFJAN77TYS48581K59J5884",
-      "captureId": "01KZFJ9TAR2YBJDVQ0RT8726R8",
-      "t": 27535.10000000894,
+      "id": "01KZMPXH4CW8RM4MM0HZWBXRCF",
+      "captureId": "01KZMPXGSTSVFQQJ4YXHT8D84D",
+      "t": 337.5,
       "kind": "lifecycle",
       "payload": {
         "transition": "redacting->composing",
@@ -383,9 +383,9 @@
       }
     },
     {
-      "id": "01KZFJAN9JB16SC0AGWB32NJJB",
-      "captureId": "01KZFJ9TAR2YBJDVQ0RT8726R8",
-      "t": 27609.90000000596,
+      "id": "01KZMPXH4H8X71D06XZS5JJ8KG",
+      "captureId": "01KZMPXGSTSVFQQJ4YXHT8D84D",
+      "t": 342.30000000074506,
       "kind": "lifecycle",
       "payload": {
         "transition": "composing->ready",
