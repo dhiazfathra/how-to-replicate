@@ -1,5 +1,6 @@
 import {
   CaptureRepository,
+  checkBudget,
   createClock,
   createInstantReplay,
   createRedactor,
@@ -7,6 +8,7 @@ import {
   finalizeCapture,
   newId,
   openCaptureDb,
+  runEviction,
   transition,
   type Capture,
   type CaptureEvent,
@@ -42,6 +44,23 @@ export type ActiveCapture = {
   onOffscreenMessageListener: OnMessageListener;
   onScreenshotRequestListener: OnMessageListener;
 };
+
+/** Structural subset of `navigator.storage.estimate()` this module needs. */
+export type StorageEstimator = () => Promise<{ usage: number; quota: number }>;
+
+/**
+ * `navigator.storage.estimate()` when available (real MV3 service workers
+ * always have it), otherwise a permissive estimate — never blocks a capture
+ * on an environment that can't report usage (e.g. tests with no `navigator`
+ * global, or a build target that never implemented the Storage API).
+ */
+async function defaultEstimateStorage(): Promise<{ usage: number; quota: number }> {
+  if (typeof navigator === 'undefined' || !navigator.storage?.estimate) {
+    return { usage: 0, quota: Infinity };
+  }
+  const estimate = await navigator.storage.estimate();
+  return { usage: estimate.usage ?? 0, quota: estimate.quota ?? Infinity };
+}
 
 export type ServiceWorker = {
   rulesetStore: RulesetStore;
@@ -106,7 +125,10 @@ function newCapture(clock: Clock): Capture {
  * the injected adapter — so it never touches the ambient `chrome` global,
  * which is what lets tests stub the boundary instead of a real browser.
  */
-export function createServiceWorker(chromeApi: ChromeAdapter): ServiceWorker {
+export function createServiceWorker(
+  chromeApi: ChromeAdapter,
+  estimateStorage: StorageEstimator = defaultEstimateStorage,
+): ServiceWorker {
   const rulesetStore = createRulesetStore(chromeApi.storage);
   // Opened lazily (only once `stop()` actually needs to persist a capture)
   // and reused across captures — `openCaptureDb` is idempotent for a given
@@ -115,6 +137,25 @@ export function createServiceWorker(chromeApi: ChromeAdapter): ServiceWorker {
   function getRepo(): Promise<CaptureRepository> {
     repoPromise ??= openCaptureDb().then((db) => new CaptureRepository(db));
     return repoPromise;
+  }
+
+  /**
+   * The Phase 0 refuse-to-record gate (invariant: no capture starts under
+   * storage pressure), now backed by Task 9's real eviction path instead of
+   * always refusing: checks the current budget, and if it's exceeded, tries
+   * to evict the LRU capture whose manifest is already fully synced
+   * (`runEviction`) before giving up. Returns false to make `start()` return
+   * null exactly like the existing origin-allow-list refusal above.
+   */
+  async function ensureBudget(): Promise<boolean> {
+    const repo = await getRepo();
+    const captures = await repo.listCaptures();
+    const estimate = await estimateStorage();
+    const budgetResult = checkBudget({ estimate, captureCount: captures.length, projectedBytes: 0 });
+    if (budgetResult.ok) return true;
+
+    const { evictedCaptureId } = await runEviction(repo, captures, budgetResult);
+    return evictedCaptureId !== null;
   }
 
   async function ensureOffscreenDocument(captureId: string): Promise<void> {
@@ -137,6 +178,7 @@ export function createServiceWorker(chromeApi: ChromeAdapter): ServiceWorker {
       if (!ruleset) return null;
       const redactor = createRedactor(ruleset);
       if (!redactor.isOriginAllowed(origin)) return null;
+      if (!(await ensureBudget())) return null;
 
       const clock = createClock();
       const capture = newCapture(clock);

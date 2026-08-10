@@ -23,6 +23,8 @@ export type Capture = {
   doc: ReplicationDoc | null;
   assets: AssetRef[];
   withheldEventCount: number;
+  /** False once eviction has removed local events/assets. Absent means true (has local data). */
+  localAssets?: boolean;
   sync: {
     revision: number;
     lastPushedAt: string | null;

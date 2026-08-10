@@ -3,6 +3,7 @@
   "references": [
     { "path": "packages/capture-core" },
     { "path": "packages/llm" },
+    { "path": "packages/sdk" },
     { "path": "packages/trackers" },
     { "path": "clients/extension" },
     { "path": "clients/viewer" },

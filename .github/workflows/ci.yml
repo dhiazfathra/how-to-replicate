@@ -84,3 +84,176 @@ jobs:
             e2e/artifacts/videos
             e2e/artifacts/report
           retention-days: 30
+
+  go-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: services/internal/go.mod
+
+      - name: golangci-lint (services/internal)
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.12.2
+          install-mode: binary
+          working-directory: services/internal
+
+      - name: golangci-lint (proto)
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.12.2
+          install-mode: binary
+          working-directory: proto
+
+      - name: golangci-lint (sync-gateway)
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.12.2
+          install-mode: binary
+          working-directory: services/sync-gateway
+
+      - name: golangci-lint (capture-api)
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.12.2
+          install-mode: binary
+          working-directory: services/capture-api
+
+      - name: golangci-lint (redaction-audit)
+        uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.12.2
+          install-mode: binary
+          working-directory: services/redaction-audit
+
+  go-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: services/internal/go.mod
+
+      - name: go work sync
+        run: go work sync
+
+      # testsupport is a docker-backed test harness with no business logic;
+      # its own coverage is inherently environment-dependent (docker daemon
+      # failure branches), so it's exercised by callers but excluded from
+      # the 100% gate below. Every other package must hit 100%.
+      - name: Test with coverage
+        working-directory: services/internal
+        run: go test $(go list ./... | grep -v /testsupport) -covermode=atomic -coverprofile=coverage.out
+
+      - name: Enforce 100% coverage
+        working-directory: services/internal
+        run: |
+          go tool cover -func=coverage.out | tee coverage.txt
+          total=$(grep '^total:' coverage.txt | awk '{print $3}' | tr -d '%')
+          echo "total coverage: ${total}%"
+          if awk "BEGIN { exit !($total < 100) }"; then
+            echo "coverage ${total}% is below the required 100%"
+            exit 1
+          fi
+
+      # sync-gateway's own tests: gateway logic is unit-tested against an
+      # in-memory Store fake, and pgstore.go's integration test proves the
+      # same logic against a real Postgres testcontainer (provided by the
+      # ubuntu-latest runner's Docker daemon) — both 100%-gated below.
+      # cmd/sync-gateway (process wiring: env vars, listener, signal
+      # handling) is excluded, same rationale as testsupport above.
+      - name: Test sync-gateway with coverage
+        working-directory: services/sync-gateway
+        run: go test $(go list ./... | grep -v /cmd/) -covermode=atomic -coverprofile=coverage.out
+
+      - name: Enforce 100% coverage (sync-gateway)
+        working-directory: services/sync-gateway
+        run: |
+          go tool cover -func=coverage.out | tee coverage.txt
+          total=$(grep '^total:' coverage.txt | awk '{print $3}' | tr -d '%')
+          echo "total coverage: ${total}%"
+          if awk "BEGIN { exit !($total < 100) }"; then
+            echo "coverage ${total}% is below the required 100%"
+            exit 1
+          fi
+
+      # capture-api: cmd/ excluded, same rationale as above. Store's
+      # CreateWorkspaceWithOwner transaction path is covered by
+      # pgstore_integration_test.go against a real Postgres testcontainer,
+      # same harness pattern as sync-gateway's.
+      - name: Test capture-api with coverage
+        working-directory: services/capture-api
+        run: go test $(go list ./... | grep -v /cmd/) -covermode=atomic -coverprofile=coverage.out
+
+      - name: Enforce 100% coverage (capture-api)
+        working-directory: services/capture-api
+        run: |
+          go tool cover -func=coverage.out | tee coverage.txt
+          total=$(grep '^total:' coverage.txt | awk '{print $3}' | tr -d '%')
+          echo "total coverage: ${total}%"
+          if awk "BEGIN { exit !($total < 100) }"; then
+            echo "coverage ${total}% is below the required 100%"
+            exit 1
+          fi
+
+      # redaction-audit: the conformance suite proving the Go and TS
+      # redaction engines agree on the golden synthetic-PHI corpus. Most
+      # important test asset in the repo (per CLAUDE.md) — 100%-gated below.
+      - name: Test redaction-audit with coverage
+        working-directory: services/redaction-audit
+        run: go test $(go list ./... | grep -v /cmd/) -covermode=atomic -coverprofile=coverage.out
+
+      - name: Enforce 100% coverage (redaction-audit)
+        working-directory: services/redaction-audit
+        run: |
+          go tool cover -func=coverage.out | tee coverage.txt
+          total=$(grep '^total:' coverage.txt | awk '{print $3}' | tr -d '%')
+          echo "total coverage: ${total}%"
+          if awk "BEGIN { exit !($total < 100) }"; then
+            echo "coverage ${total}% is below the required 100%"
+            exit 1
+          fi
+
+  sdk-bundle-size:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Fails if the minified/gzipped SDK bundle exceeds its size budget —
+      # keeps "must not bundle the whole of capture-core" enforced on every
+      # PR, not just true on the day someone measured it.
+      - name: Check SDK bundle size
+        working-directory: packages/sdk
+        run: pnpm check:bundle-size
+
+  buf-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: bufbuild/buf-action@v1
+        with:
+          input: proto
+          pr_comment: false
+          # `proto/` does not exist on `main` yet — this PR introduces it — so
+          # there is no valid prior commit for `buf breaking` to diff against
+          # (it fails with "Module had no .proto files" on the PR's base SHA).
+          # Re-enable once this PR merges: every subsequent PR's base will
+          # then actually contain `proto/`, and the check becomes meaningful.
+          breaking: false

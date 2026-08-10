@@ -3,3 +3,7 @@ packages:
   - "clients/*"
 allowBuilds:
   esbuild: true
+  # tesseract.js ships its dist/ prebuilt in the published package; its
+  # `build` script only re-runs webpack for local development on the
+  # library itself, so we don't need it.
+  tesseract.js: false

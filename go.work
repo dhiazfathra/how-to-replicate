@@ -1,0 +1,11 @@
+go 1.25.0
+
+use ./services/internal
+
+use ./proto
+
+use ./services/sync-gateway
+
+use ./services/capture-api
+
+use ./services/redaction-audit

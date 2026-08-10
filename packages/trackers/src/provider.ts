@@ -31,8 +31,15 @@ export type CreatedIssue = {
   id: string;
 };
 
+/**
+ * `id` is widened to include `'slack'` (task 14) — the only change this
+ * task makes to the interface. `authorize`/`createIssue` are untouched:
+ * Slack's "post a message" maps onto "create an issue" the same way
+ * GitHub/GitLab's do (see slack.ts's `createIssue` for how a channel post
+ * stands in for an issue: `id` becomes the message `ts`, `url` a permalink).
+ */
 export type TrackerProvider = {
-  id: 'github' | 'gitlab';
+  id: 'github' | 'gitlab' | 'slack';
   authorize(): Promise<AuthResult>;
   createIssue(input: IssueInput): Promise<CreatedIssue>;
 };

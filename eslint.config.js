@@ -3,12 +3,19 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    // `e2e/public/harness.js` is the esbuild-bundled harness, not source.
-    ignores: ['**/dist/**', '**/coverage/**', '**/node_modules/**', 'e2e/public/harness.js'],
+    // `e2e/public/harness.js` and `e2e-nightly/public/fixture.js` are
+    // esbuild-bundled output, not source.
+    ignores: [
+      '**/dist/**',
+      '**/coverage/**',
+      '**/node_modules/**',
+      'e2e/public/harness.js',
+      'e2e-nightly/public/fixture.js',
+    ],
   },
   js.configs.recommended,
   {
-    files: ['packages/**/src/**/*.ts', 'clients/**/src/**/*.ts', 'e2e/**/*.ts'],
+    files: ['packages/**/src/**/*.ts', 'clients/**/src/**/*.ts', 'e2e/**/*.ts', 'e2e-nightly/**/*.ts'],
     extends: [...tseslint.configs.recommendedTypeChecked],
     languageOptions: {
       parserOptions: {
@@ -18,7 +25,14 @@ export default tseslint.config(
     },
   },
   {
-    files: ['**/*.config.ts', 'scripts/*.mjs', 'e2e/*.mjs', '**/*.test.mjs'],
+    files: [
+      '**/*.config.ts',
+      'scripts/*.mjs',
+      'packages/*/scripts/*.mjs',
+      'e2e/*.mjs',
+      'e2e-nightly/*.mjs',
+      '**/*.test.mjs',
+    ],
     extends: [...tseslint.configs.recommended],
     languageOptions: {
       parserOptions: {

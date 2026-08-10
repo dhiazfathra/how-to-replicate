@@ -189,4 +189,30 @@ describe('CaptureRepository', () => {
     await expect(repo.getCapture('cap-1')).resolves.toBeUndefined();
     await expect(repo.readEvents('cap-1')).resolves.toEqual([]);
   });
+
+  it('evictLocalAssets removes events/assets but keeps the capture marked localAssets: false', async () => {
+    const capture = makeCapture('cap-1');
+    capture.assets = [makeAssetRef('asset-1', 'cap-1', 5)];
+    await repo.putCapture(capture);
+    await repo.appendEvents('cap-1', [makeEvent('evt-1', 'cap-1', 1)]);
+    await repo.putAssetChunked(makeAssetRef('asset-1', 'cap-1', 5), new Uint8Array([1, 2, 3, 4, 5]), 2);
+
+    await repo.evictLocalAssets('cap-1');
+
+    const remaining = await repo.getCapture('cap-1');
+    expect(remaining).toMatchObject({ id: 'cap-1', localAssets: false, assets: [] });
+    await expect(repo.readEvents('cap-1')).resolves.toEqual([]);
+    await expect(repo.readAsset('asset-1')).resolves.toBeUndefined();
+  });
+
+  it('evictLocalAssets on a capture with no events/assets is a no-op beyond the marker', async () => {
+    await repo.putCapture(makeCapture('cap-1'));
+    await repo.evictLocalAssets('cap-1');
+    await expect(repo.getCapture('cap-1')).resolves.toMatchObject({ localAssets: false });
+  });
+
+  it('evictLocalAssets on a missing capture does nothing and does not throw', async () => {
+    await expect(repo.evictLocalAssets('missing')).resolves.toBeUndefined();
+    await expect(repo.getCapture('missing')).resolves.toBeUndefined();
+  });
 });

@@ -28,12 +28,13 @@ import {
   createRingBuffer,
   finalizeCapture,
   newId,
-  openCaptureDb,
+  openIdentityPartitionDb,
   parseRuleset,
   transition,
   type Capture,
   type CaptureEvent,
   type Clock,
+  type Identity,
   type InstantReplay,
   type NavigationPayload,
   type RedactionRuleset,
@@ -70,9 +71,16 @@ function buildRuleset(): RedactionRuleset {
 
 const ruleset = buildRuleset();
 
-let dbPromise: ReturnType<typeof openCaptureDb> | null = null;
-function getDb(): ReturnType<typeof openCaptureDb> {
-  dbPromise ??= openCaptureDb();
+// The viewer only ever reads the partition of the last-authenticated
+// identity (`bootstrapSession`) — an anonymous, unpartitioned database is
+// invisible to it by design. This harness stands in for a real logged-in
+// session by recording the same fixed identity a real `login()` call would,
+// so everything it seeds or persists lands where the app actually looks.
+const E2E_IDENTITY: Identity = { subject: 'e2e-test-user', workspaceId: 'e2e-test-workspace' };
+
+let dbPromise: ReturnType<typeof openIdentityPartitionDb> | null = null;
+function getDb(): ReturnType<typeof openIdentityPartitionDb> {
+  dbPromise ??= openIdentityPartitionDb(E2E_IDENTITY);
   return dbPromise;
 }
 

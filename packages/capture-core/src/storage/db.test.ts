@@ -6,7 +6,15 @@ describe('openCaptureDb', () => {
   it('opens a database with all object stores and indexes', async () => {
     const db = await openCaptureDb('test-db-1', { indexedDB: new IDBFactory() });
     expect([...db.objectStoreNames].sort()).toEqual(
-      ['asset_chunks', 'assets', 'captures', 'events', 'rulesets'].sort(),
+      [
+        'asset_chunks',
+        'assets',
+        'captures',
+        'events',
+        'rulesets',
+        'sync_cursor',
+        'sync_mutations',
+      ].sort(),
     );
     const tx = db.transaction('events', 'readonly');
     expect([...tx.store.indexNames]).toContain('by-capture');
